@@ -133,12 +133,16 @@ export default function FileSearchChat({ onOpenConfig, onOpenAdmin }: FileSearch
       // Ordenar: más antiguos arriba, más nuevos abajo
       results.sort((a, b) => new Date(a.last_modified).getTime() - new Date(b.last_modified).getTime());
 
+      const accessibleOnly = results.filter(f => f.has_access !== false);
+
       const botMessage: Message = {
         id: (Date.now() + 1).toString(),
         role: 'bot',
-        text: results.length > 0
-          ? `Encontré ${results.length} archivo${results.length > 1 ? 's' : ''} que coinciden con "${query}":`
-          : `No encontré archivos que coincidan con "${query}". Intenta con otros términos.`,
+        text: accessibleOnly.length > 0
+          ? `Encontré ${accessibleOnly.length} archivo${accessibleOnly.length > 1 ? 's' : ''} que coinciden con "${query}":`
+          : results.length > 0 
+            ? "" // Si solo hay restringidos, dejamos el texto vacío para que solo salgan las tarjetas
+            : `No encontré archivos que coincidan con "${query}". Intenta con otros términos.`,
         files: results,
       };
 

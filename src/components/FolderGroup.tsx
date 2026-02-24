@@ -62,6 +62,22 @@ const FolderGroup = memo(function FolderGroup({
   const accessibleFiles = files.filter(f => f.has_access !== false);
   const hasInaccessibleFiles = files.some(f => f.has_access === false);
 
+  if (accessibleFiles.length === 0 && hasInaccessibleFiles) {
+    return (
+      <div className="mb-4 bg-yellow-500/10 border border-yellow-500/20 rounded-xl p-4 flex items-start gap-3 text-yellow-600 dark:text-yellow-500 animate-fade-in shadow-sm">
+        <AlertTriangle className="w-5 h-5 shrink-0 mt-0.5" />
+        <div className="flex-1">
+          <p className="text-sm font-bold mb-1">Carpeta Restringida</p>
+          <p className="text-xs sm:text-sm font-medium leading-relaxed">
+            Usted no tiene acceso a esta carpeta del servidor. Comuníquese con Soporte TI de Hellema Holland.
+          </p>
+        </div>
+      </div>
+    );
+  }
+
+  if (accessibleFiles.length === 0 && !hasInaccessibleFiles) return null;
+
   return (
     <div className="mb-4 bg-card rounded-xl border border-border overflow-hidden shadow-sm">
       {/* Cabecera de la carpeta */}
@@ -74,7 +90,7 @@ const FolderGroup = memo(function FolderGroup({
         </div>
         <div className="flex items-center gap-3 text-muted-foreground">
           <span className="text-xs bg-secondary/50 px-2 py-1 rounded-full text-foreground">
-            {accessibleFiles.length > 0 ? `${accessibleFiles.length} archivo${accessibleFiles.length !== 1 ? 's' : ''}` : hasInaccessibleFiles ? 'Archivos ocultos' : '0 archivos'}
+            {accessibleFiles.length} archivo{accessibleFiles.length !== 1 ? 's' : ''}
           </span>
           {isOpen ? <ChevronDown className="w-4 h-4 text-muted-foreground" /> : <ChevronRight className="w-4 h-4 text-muted-foreground" />}
         </div>
@@ -83,17 +99,6 @@ const FolderGroup = memo(function FolderGroup({
       {/* Lista de archivos */}
       {isOpen && (
         <div className="relative py-2">
-          {hasInaccessibleFiles && (
-            <div className="relative flex flex-col ml-11 mr-3 mb-2 px-3 py-2.5 rounded-lg bg-yellow-500/10 border border-yellow-500/20 text-yellow-600 dark:text-yellow-500">
-              <div className="flex items-start gap-3">
-                <AlertTriangle className="w-5 h-5 shrink-0 mt-0.5" />
-                <p className="text-xs sm:text-sm font-medium leading-relaxed">
-                  Usted no tiene acceso a esta carpeta del servidor. Comuníquese con Soporte TI de Hellema Holland.
-                </p>
-              </div>
-            </div>
-          )}
-
           {accessibleFiles.map((file, index) => {
             const isLast = index === accessibleFiles.length - 1;
             const Icon = iconMap[file.file_type.toLowerCase()] || iconMap.default;

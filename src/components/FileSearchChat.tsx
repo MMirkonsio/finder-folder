@@ -24,6 +24,7 @@ interface Message {
   text: string;
   files?: FileRecord[];
   isError?: boolean;
+  hasRestrictedOnly?: boolean;
 }
 
 interface FileSearchChatProps {
@@ -134,6 +135,7 @@ export default function FileSearchChat({ onOpenConfig, onOpenAdmin }: FileSearch
       results.sort((a, b) => new Date(a.last_modified).getTime() - new Date(b.last_modified).getTime());
 
       const accessibleOnly = results.filter(f => f.has_access !== false);
+      const allRestricted = results.length > 0 && accessibleOnly.length === 0;
 
       const botMessage: Message = {
         id: (Date.now() + 1).toString(),
@@ -141,9 +143,10 @@ export default function FileSearchChat({ onOpenConfig, onOpenAdmin }: FileSearch
         text: accessibleOnly.length > 0
           ? `Encontré ${accessibleOnly.length} archivo${accessibleOnly.length > 1 ? 's' : ''} que coinciden con "${query}":`
           : results.length > 0 
-            ? "" // Si solo hay restringidos, dejamos el texto vacío para que solo salgan las tarjetas
+            ? "" 
             : `No encontré archivos que coincidan con "${query}". Intenta con otros términos.`,
         files: results,
+        hasRestrictedOnly: allRestricted
       };
 
       setMessages(prev => [...prev, botMessage]);
@@ -386,25 +389,39 @@ export default function FileSearchChat({ onOpenConfig, onOpenAdmin }: FileSearch
             const isBot = message.role === 'bot';
             return (
               <div key={message.id} className={`animate-fade-in flex ${isBot ? "" : "flex-row-reverse"}`}>
-                
                 <div className={`max-w-full w-full space-y-4 ${isBot ? "" : "text-right"}`}>
-                  <div className={`inline-block rounded-2xl px-5 py-3 text-sm shadow-sm border border-border/50 ${
-                    isBot 
-                      ? message.isError
-                         ? "bg-yellow-500/10 text-yellow-500 border-yellow-500/20 max-w-[95%]"
-                         : "bg-chat-bot text-foreground max-w-[95%]" 
-                      : "bg-primary text-primary-foreground font-medium max-w-[85%]"
-                  }`}>
-                    {message.isError ? (
-                      <div className="flex items-start gap-3">
-                        <AlertTriangle className="w-5 h-5 shrink-0 mt-0.5" />
-                        <span className="leading-relaxed">{message.text}</span>
-                      </div>
-                    ) : (
-                      message.text
-                    )}
-                  </div>
+                  {/* Solo mostrar la burbuja si hay texto o es un error */}
+                  {(message.text !== "" || message.isError) && (
+                    <div className={`inline-block rounded-2xl px-5 py-3 text-sm shadow-sm border border-border/50 ${
+                      isBot 
+                        ? message.isError
+                           ? "bg-yellow-500/10 text-yellow-500 border-yellow-500/20 max-w-[95%]"
+                           : "bg-chat-bot text-foreground max-w-[95%]" 
+                        : "bg-primary text-primary-foreground font-medium max-w-[85%]"
+                    }`}>
+                      {message.isError ? (
+                        <div className="flex items-start gap-3 text-left">
+                          <AlertTriangle className="w-5 h-5 shrink-0 mt-0.5" />
+                          <span className="leading-relaxed">{message.text}</span>
+                        </div>
+                      ) : (
+                        message.text
+                      )}
+                    </div>
+                  )}
                   
+                  {message.hasRestrictedOnly && (
+                    <div className="mb-4 bg-yellow-500/10 border border-yellow-500/20 rounded-xl p-6 flex items-start gap-4 text-left text-yellow-600 dark:text-yellow-500 animate-fade-in shadow-md w-full">
+                      <AlertTriangle className="w-6 h-6 shrink-0 mt-0.5" />
+                      <div className="flex-1">
+                        <p className="text-base font-bold mb-1">Resultado Restringido</p>
+                        <p className="text-sm sm:text-base font-medium leading-relaxed">
+                          Usted no tiene acceso a esta carpeta del servidor. Comuníquese con Soporte TI de Hellema Holland.
+                        </p>
+                      </div>
+                    </div>
+                  )}
+
                   {message.files && message.files.length > 0 && (
                     <div className="w-full mt-4 flex flex-col text-left">
                       {Object.entries(groupFilesByPath(message.files)).map(([path, files]) => (

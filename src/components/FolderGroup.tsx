@@ -7,8 +7,7 @@ import {
   ChevronRight,
   FileSpreadsheet,
   Presentation,
-  Table,
-  AlertTriangle
+  Table
 } from 'lucide-react';
 import { FileRecord, getFileUrl } from '../lib/api';
 
@@ -60,23 +59,8 @@ const FolderGroup = memo(function FolderGroup({
   };
 
   const accessibleFiles = files.filter(f => f.has_access !== false);
-  const hasInaccessibleFiles = files.some(f => f.has_access === false);
 
-  if (accessibleFiles.length === 0 && hasInaccessibleFiles) {
-    return (
-      <div className="mb-4 bg-yellow-500/10 border border-yellow-500/20 rounded-xl p-4 flex items-start gap-3 text-yellow-600 dark:text-yellow-500 animate-fade-in shadow-sm">
-        <AlertTriangle className="w-5 h-5 shrink-0 mt-0.5" />
-        <div className="flex-1">
-          <p className="text-sm font-bold mb-1">Carpeta Restringida</p>
-          <p className="text-xs sm:text-sm font-medium leading-relaxed">
-            Usted no tiene acceso a esta carpeta del servidor. Comuníquese con Soporte TI de Hellema Holland.
-          </p>
-        </div>
-      </div>
-    );
-  }
-
-  if (accessibleFiles.length === 0 && !hasInaccessibleFiles) return null;
+  if (accessibleFiles.length === 0) return null;
 
   return (
     <div className="mb-4 bg-card rounded-xl border border-border overflow-hidden shadow-sm">

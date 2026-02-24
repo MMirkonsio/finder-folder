@@ -54,7 +54,7 @@
     "productName": "Hellema Holland ChatBot",
     "icon": "public/img/icon.ico",
     "directories": {
-      "output": "release"
+      "output": "Releases_Generados/v${version}"
     },
     "files": [
       "dist/**/*",
@@ -75,7 +75,8 @@
     ],
     "win": {
       "target": "nsis",
-      "icon": "public/img/icon.ico"
+      "icon": "public/img/icon.ico",
+      "artifactName": "Hellema_Holland_ChatBot_Setup_${version}.${ext}"
     },
     "publish": [
       {

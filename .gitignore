@@ -23,6 +23,7 @@ dist-ssr
 .env
 
 release/
+Releases_Generados/
 dev.db
 prisma/dev.db
 bfg.jar

@@ -1,13 +1,20 @@
 
-const { app, BrowserWindow, shell, ipcMain } = require('electron');
+const { app, BrowserWindow, shell, ipcMain, Tray, Menu } = require('electron');
 const path = require('path');
 const isDev = !app.isPackaged;
 const { fork } = require('child_process');
 const fs = require('fs');
 const { autoUpdater } = require('electron-updater');
 
+// Fix for duplicate taskbar icons on Windows: Ensures windows are grouped under one taskbar icon
+if (process.platform === 'win32') {
+  app.setAppUserModelId('com.hellemabot');
+}
+
 let mainWindow;
 let serverProcess;
+let tray = null;
+let isQuitting = false;
 
 // Variables to store bounds for restoring
 let previousBounds = { x: 0, y: 0, width: 450, height: 750 };
@@ -15,7 +22,9 @@ let bubbleBounds = null;
 
 // Manejar eventos desde el renderizado
 ipcMain.on('window-close', () => {
-  if (mainWindow) mainWindow.close();
+  if (mainWindow) {
+    mainWindow.hide();
+  }
 });
 
 ipcMain.handle('get-app-version', () => {
@@ -223,8 +232,8 @@ function startServer() {
 
 function createWindow() {
   const iconPath = isDev 
-    ? path.join(__dirname, '../public/img/LogoHHE 2.webp')
-    : path.join(__dirname, '../dist/img/LogoHHE 2.webp');
+    ? path.join(__dirname, '../public/img/icon.ico')
+    : path.join(__dirname, '../dist/img/icon.ico');
 
   mainWindow = new BrowserWindow({
     icon: iconPath,
@@ -259,6 +268,13 @@ function createWindow() {
     // Se eliminó la apertura de DevTools a petición del usuario
   });
 
+  mainWindow.on('close', (event) => {
+    if (!isQuitting) {
+      event.preventDefault();
+      mainWindow.hide();
+    }
+  });
+
   mainWindow.on('closed', () => {
     mainWindow = null;
   });
@@ -270,11 +286,66 @@ function createWindow() {
   });
 }
 
-app.on('ready', () => {
-  startServer();
-  createWindow();
+const gotTheLock = app.requestSingleInstanceLock();
 
-  // Check for updates automatically in production
+if (!gotTheLock) {
+  app.quit();
+} else {
+  app.on('second-instance', (event, commandLine, workingDirectory) => {
+    // Alguien intentó ejecutar una segunda instancia, deberíamos enfocar nuestra ventana.
+    if (mainWindow) {
+      if (!mainWindow.isVisible()) {
+        mainWindow.show();
+      }
+      if (mainWindow.isMinimized()) {
+        mainWindow.restore();
+      }
+      mainWindow.focus();
+    }
+  });
+
+  app.on('ready', () => {
+    startServer();
+    createWindow();
+
+    const trayIconPath = isDev 
+      ? path.join(__dirname, '../public/img/icon.ico')
+      : path.join(__dirname, '../dist/img/icon.ico');
+
+    // Create tray icon
+    tray = new Tray(trayIconPath);
+    tray.setToolTip('Hellema Holland BOT');
+
+    const contextMenu = Menu.buildFromTemplate([
+      { 
+        label: 'Mostrar', 
+        click: () => {
+          if (mainWindow) mainWindow.show();
+        } 
+      },
+      { type: 'separator' },
+      { 
+        label: 'Cerrar', 
+        click: () => {
+          isQuitting = true;
+          app.quit();
+        } 
+      }
+    ]);
+
+    tray.setContextMenu(contextMenu);
+
+    tray.on('click', () => {
+      if (mainWindow) {
+        if (mainWindow.isVisible()) {
+          mainWindow.focus();
+        } else {
+          mainWindow.show();
+        }
+      }
+    });
+
+    // Check for updates automatically in production
   if (!isDev) {
     autoUpdater.autoDownload = true;
     autoUpdater.autoInstallOnAppQuit = true;
@@ -308,3 +379,4 @@ app.on('activate', () => {
     createWindow();
   }
 });
+}

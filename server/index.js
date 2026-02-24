@@ -336,11 +336,11 @@ async function runIncrementalScan() {
   }
 }
 
-// Iniciar chequeo automático cada 10 minutos (600,000 ms)
+// Iniciar chequeo automático cada 20 minutos (1,200,000 ms)
 setInterval(() => {
   console.log('[Auto-Scan] Disparando escaneo periódico...');
   runIncrementalScan();
-}, 10 * 60 * 1000);
+}, 20 * 60 * 1000);
 
 // Server-side scan endpoint (Manual Trigger)
 app.post('/api/scan', async (req, res) => {

@@ -37,6 +37,8 @@ export default function FileSearchChat({ onOpenConfig, onOpenAdmin }: FileSearch
   const [isSearching, setIsSearching] = useState(false);
   const [serverUrl, setServerUrl] = useState('');
   const [totalFiles, setTotalFiles] = useState(0);
+  const [appVersion, setAppVersion] = useState<string>('');
+  const [showClearModal, setShowClearModal] = useState(false);
   const [isMinimized, setIsMinimized] = useState(false);
   const [previewFile, setPreviewFile] = useState<FileRecord | null>(null);
   
@@ -51,6 +53,9 @@ export default function FileSearchChat({ onOpenConfig, onOpenAdmin }: FileSearch
     loadServerConfig();
     loadStats();
     addWelcomeMessage();
+    if ((window as any).electron?.getAppVersion) {
+      (window as any).electron.getAppVersion().then((v: string) => setAppVersion(v));
+    }
   }, []);
 
   useEffect(() => {
@@ -87,19 +92,11 @@ export default function FileSearchChat({ onOpenConfig, onOpenAdmin }: FileSearch
     }
   };
 
-  const addWelcomeMessage = async () => {
-    let versionStr = '';
-    if ((window as any).electron && (window as any).electron.getAppVersion) {
-      try {
-        const v = await (window as any).electron.getAppVersion();
-        if (v) versionStr = ` (v${v})`;
-      } catch (e) {}
-    }
-
+  const addWelcomeMessage = () => {
     const welcomeMessage: Message = {
       id: Date.now().toString(),
       role: 'bot',
-      text: `¡Hola! Soy HellemaBOT${versionStr}. Puedo ayudarte a encontrar archivos rápidamente en la red. ¿Qué estás buscando hoy?`,
+      text: '¡Hola! Soy HellemaBOT. Puedo ayudarte a encontrar archivos rápidamente en la red. ¿Qué estás buscando hoy?',
     };
     setMessages([welcomeMessage]);
   };
@@ -119,6 +116,9 @@ export default function FileSearchChat({ onOpenConfig, onOpenAdmin }: FileSearch
 
     try {
       const results = await api.searchFiles(query);
+
+      // Ordenar: más antiguos arriba, más nuevos abajo
+      results.sort((a, b) => new Date(a.last_modified).getTime() - new Date(b.last_modified).getTime());
 
       const botMessage: Message = {
         id: (Date.now() + 1).toString(),
@@ -151,20 +151,13 @@ export default function FileSearchChat({ onOpenConfig, onOpenAdmin }: FileSearch
     }
   };
 
-  const clearChat = async () => {
-    let versionStr = '';
-    if ((window as any).electron && (window as any).electron.getAppVersion) {
-      try {
-        const v = await (window as any).electron.getAppVersion();
-        if (v) versionStr = ` (v${v})`;
-      } catch (e) {}
-    }
-
+  const clearChat = () => {
     setMessages([{
       id: 'initial',
       role: 'bot',
-      text: `¡Hola! Soy HellemaBOT${versionStr}. Puedo ayudarte a encontrar archivos rápidamente en la red. ¿Qué estás buscando hoy?`
+      text: '¡Hola! Soy HellemaBOT. Puedo ayudarte a encontrar archivos rápidamente en la red. ¿Qué estás buscando hoy?'
     }]);
+    setShowClearModal(false);
   };
 
   const handleClose = () => {
@@ -231,13 +224,46 @@ export default function FileSearchChat({ onOpenConfig, onOpenAdmin }: FileSearch
         </div>
       </div>
 
+      {showClearModal && (
+        <div className="fixed inset-0 bg-background/60 backdrop-blur-sm z-[100] flex items-center justify-center p-4">
+          <div className="bg-card w-full max-w-sm rounded-2xl shadow-2xl border border-border overflow-hidden animate-fade-in text-foreground p-6">
+            <div className="flex flex-col items-center text-center space-y-4">
+              <div className="w-12 h-12 bg-destructive/10 text-destructive rounded-full flex items-center justify-center">
+                <Trash2 size={24} />
+              </div>
+              <div>
+                <h3 className="text-lg font-bold">¿Limpiar Chat?</h3>
+                <p className="text-sm text-muted-foreground mt-2">Esta acción borrará todo el historial de conversación y de búsqueda actual.</p>
+              </div>
+              <div className="flex gap-3 w-full mt-4">
+                <button 
+                  onClick={() => setShowClearModal(false)}
+                  className="flex-1 py-2.5 rounded-xl font-medium bg-secondary text-foreground hover:bg-secondary/80 transition-colors"
+                >
+                  Cancelar
+                </button>
+                <button 
+                  onClick={clearChat}
+                  className="flex-1 py-2.5 rounded-xl font-medium bg-destructive text-destructive-foreground hover:bg-destructive/90 transition-colors shadow-md shadow-destructive/20"
+                >
+                  Confirmar
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Interfaz principal del Chat */}
       <div className={`flex flex-col h-[100vh] bg-background text-foreground selection:bg-primary/30 overflow-hidden rounded-xl border border-border shadow-2xl ${isMinimized ? 'hidden' : ''}`}>
         {/* Custom Title Bar / Drag Area */}
         <div 
-          className="h-8 bg-card/80 backdrop-blur-md border-b border-border flex items-center justify-end px-4 shrink-0"
+          className="h-8 bg-card/80 backdrop-blur-md border-b border-border flex items-center justify-between px-4 shrink-0"
         style={{ WebkitAppRegion: 'drag' } as any}
       >
+        <p className="text-[9px] uppercase tracking-wider text-muted-foreground select-none" style={{ WebkitAppRegion: 'no-drag' } as any}>
+          {appVersion && `(v${appVersion})`}
+        </p>
         <div className="flex items-center gap-1 relative z-50" style={{ WebkitAppRegion: 'no-drag' } as any}>
           <button 
             type="button"
@@ -284,7 +310,7 @@ export default function FileSearchChat({ onOpenConfig, onOpenAdmin }: FileSearch
               <img src="./img/LogoHHE 2.webp" alt="Logo Hellema Holland" className="h-8 object-contain" />
               </div>
               <div>
-                <h1 className="text-base font-bold tracking-tight">Hellema Holland</h1>
+                <h1 className="text-base font-bold tracking-tight">HellemaBOT</h1>
                 <div className="flex items-center gap-2 mt-0.5">
                   <span className="flex h-1.5 w-1.5 rounded-full bg-green-500 animate-pulse" />
                   <p className="text-[9px] uppercase tracking-wider text-muted-foreground font-semibold">En línea</p>
@@ -293,11 +319,11 @@ export default function FileSearchChat({ onOpenConfig, onOpenAdmin }: FileSearch
             </div>
             <div className="flex items-center gap-3">
               <button 
-                onClick={clearChat}
-                className="p-1.5 hover:bg-secondary rounded-full transition-colors text-muted-foreground hover:text-destructive"
+                onClick={() => setShowClearModal(true)}
+                className="p-1.5 hover:bg-destructive/10 rounded-full transition-colors text-muted-foreground hover:text-destructive"
                 title="Limpiar chat"
               >
-                <Trash2 className="w-4 h-4" />
+                <Trash2 className="w-[18px] h-[18px]" />
               </button>
               <div className="flex items-center gap-2 bg-secondary/30 border border-border px-3 py-1 rounded-full">
                 <span className="text-[10px] font-mono font-medium text-muted-foreground">

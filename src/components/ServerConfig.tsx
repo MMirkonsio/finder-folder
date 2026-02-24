@@ -109,11 +109,6 @@ export default function ServerConfig({ isOpen, onClose, onConfigSaved }: ServerC
               <Settings className="text-primary" size={20} />
               <h2 className="text-lg font-bold">Configuración</h2>
             </div>
-            {appVersion && (
-              <span className="text-xs text-muted-foreground mt-1 ml-7">
-                Versión actual: v{appVersion}
-              </span>
-            )}
           </div>
           <button 
             onClick={onClose}

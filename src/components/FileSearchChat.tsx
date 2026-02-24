@@ -147,7 +147,7 @@ export default function FileSearchChat({ onOpenConfig, onOpenAdmin }: FileSearch
     setMessages([{
       id: 'initial',
       role: 'bot',
-      text: '¡Hola! Soy HellemaBOT (v0.0.1). Puedo ayudarte a encontrar archivos rápidamente en la red. ¿Qué estás buscando hoy?'
+      text: '¡Hola! Soy HellemaBOT. Puedo ayudarte a encontrar archivos rápidamente en la red. ¿Qué estás buscando hoy?'
     }]);
   };
 

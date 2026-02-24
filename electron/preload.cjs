@@ -7,6 +7,7 @@ contextBridge.exposeInMainWorld('electron', {
   restoreFromBubble: () => ipcRenderer.send('window-restore-bubble'),
   dragBubble: (data) => ipcRenderer.send('drag-bubble', data),
   openPath: (targetPath) => ipcRenderer.send('open-path', targetPath),
+  getAppVersion: () => ipcRenderer.invoke('get-app-version'),
 });
 
 console.log('Preload script cargado correctamente');

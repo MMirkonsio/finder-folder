@@ -23,10 +23,14 @@ export default function ServerConfig({ isOpen, onClose, onConfigSaved }: ServerC
   const [rootPaths, setRootPaths] = useState<string[]>(Array(10).fill(''));
   const [isLoading, setIsLoading] = useState(false);
   const [status, setStatus] = useState<{ type: 'success' | 'error', message: string } | null>(null);
+  const [appVersion, setAppVersion] = useState<string>('');
 
   useEffect(() => {
     if (isOpen) {
       loadConfig();
+      if ((window as any).electron && (window as any).electron.getAppVersion) {
+        (window as any).electron.getAppVersion().then((v: string) => setAppVersion(v));
+      }
     }
   }, [isOpen]);
 
@@ -100,9 +104,16 @@ export default function ServerConfig({ isOpen, onClose, onConfigSaved }: ServerC
     <div className="fixed inset-0 bg-background/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
       <div className="bg-card w-full max-w-md rounded-2xl shadow-2xl border border-border overflow-hidden animate-fade-in text-foreground">
         <div className="px-6 py-4 border-b border-border flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <Settings className="text-primary" size={20} />
-            <h2 className="text-lg font-bold">Configuración</h2>
+          <div className="flex flex-col">
+            <div className="flex items-center gap-2">
+              <Settings className="text-primary" size={20} />
+              <h2 className="text-lg font-bold">Configuración</h2>
+            </div>
+            {appVersion && (
+              <span className="text-xs text-muted-foreground mt-1 ml-7">
+                Versión actual: v{appVersion}
+              </span>
+            )}
           </div>
           <button 
             onClick={onClose}

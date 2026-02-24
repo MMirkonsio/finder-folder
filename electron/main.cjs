@@ -18,6 +18,10 @@ ipcMain.on('window-close', () => {
   if (mainWindow) mainWindow.close();
 });
 
+ipcMain.handle('get-app-version', () => {
+  return app.getVersion();
+});
+
 ipcMain.on('window-minimize-bubble', () => {
   if (mainWindow) {
     previousBounds = mainWindow.getBounds();

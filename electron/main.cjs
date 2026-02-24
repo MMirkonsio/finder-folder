@@ -22,6 +22,10 @@ ipcMain.handle('get-app-version', () => {
   return app.getVersion();
 });
 
+ipcMain.on('install-update', () => {
+  autoUpdater.quitAndInstall();
+});
+
 ipcMain.on('window-minimize-bubble', () => {
   if (mainWindow) {
     previousBounds = mainWindow.getBounds();
@@ -272,7 +276,17 @@ app.on('ready', () => {
 
   // Check for updates automatically in production
   if (!isDev) {
-    autoUpdater.checkForUpdatesAndNotify();
+    autoUpdater.autoDownload = true;
+    autoUpdater.autoInstallOnAppQuit = true;
+    autoUpdater.checkForUpdates();
+    
+    autoUpdater.on('update-available', (info) => {
+      if (mainWindow) mainWindow.webContents.send('update-available', info.version);
+    });
+
+    autoUpdater.on('update-downloaded', (info) => {
+      if (mainWindow) mainWindow.webContents.send('update-downloaded', info.version);
+    });
   }
 });
 

@@ -8,7 +8,7 @@ import {
   FileSpreadsheet,
   Presentation,
   Table,
-  Lock
+  AlertTriangle
 } from 'lucide-react';
 import { FileRecord, getFileUrl } from '../lib/api';
 
@@ -59,6 +59,9 @@ const FolderGroup = memo(function FolderGroup({
     }
   };
 
+  const accessibleFiles = files.filter(f => f.has_access !== false);
+  const hasInaccessibleFiles = files.some(f => f.has_access === false);
+
   return (
     <div className="mb-4 bg-card rounded-xl border border-border overflow-hidden shadow-sm">
       {/* Cabecera de la carpeta */}
@@ -71,7 +74,7 @@ const FolderGroup = memo(function FolderGroup({
         </div>
         <div className="flex items-center gap-3 text-muted-foreground">
           <span className="text-xs bg-secondary/50 px-2 py-1 rounded-full text-foreground">
-            {files.length} archivo{files.length !== 1 && 's'}
+            {accessibleFiles.length > 0 ? `${accessibleFiles.length} archivo${accessibleFiles.length !== 1 ? 's' : ''}` : hasInaccessibleFiles ? 'Archivos ocultos' : '0 archivos'}
           </span>
           {isOpen ? <ChevronDown className="w-4 h-4 text-muted-foreground" /> : <ChevronRight className="w-4 h-4 text-muted-foreground" />}
         </div>
@@ -80,8 +83,19 @@ const FolderGroup = memo(function FolderGroup({
       {/* Lista de archivos */}
       {isOpen && (
         <div className="relative py-2">
-          {files.map((file, index) => {
-            const isLast = index === files.length - 1;
+          {hasInaccessibleFiles && (
+            <div className="relative flex flex-col ml-11 mr-3 mb-2 px-3 py-2.5 rounded-lg bg-yellow-500/10 border border-yellow-500/20 text-yellow-600 dark:text-yellow-500">
+              <div className="flex items-start gap-3">
+                <AlertTriangle className="w-5 h-5 shrink-0 mt-0.5" />
+                <p className="text-xs sm:text-sm font-medium leading-relaxed">
+                  Usted no tiene acceso a esta carpeta del servidor. Comuníquese con Soporte TI de Hellema Holland.
+                </p>
+              </div>
+            </div>
+          )}
+
+          {accessibleFiles.map((file, index) => {
+            const isLast = index === accessibleFiles.length - 1;
             const Icon = iconMap[file.file_type.toLowerCase()] || iconMap.default;
             const colors = getFileColors(file.file_type);
             const canPreview = ['pdf', 'jpg', 'jpeg', 'png'].includes(file.file_type.toLowerCase());
@@ -112,24 +126,23 @@ const FolderGroup = memo(function FolderGroup({
                   />
                 )}
 
-                <div className={`relative z-10 flex items-center justify-between p-2 rounded-lg group transition-colors m-1 ${file.has_access === false ? 'opacity-70 bg-secondary/10 cursor-not-allowed' : 'hover:bg-secondary/30'}`} title={file.has_access === false ? 'No tienes permisos de red para acceder a este archivo.' : ''}>
+                <div className="relative z-10 flex items-center justify-between p-2 rounded-lg group transition-colors m-1 hover:bg-secondary/30">
                   <div className="flex items-center gap-3 min-w-0 flex-1">
-                    <div className={`p-2 rounded-lg transition-colors ${file.has_access === false ? 'bg-secondary text-muted-foreground/50' : `${colors.bg} ${colors.groupHoverBg}`}`}>
-                      {file.has_access === false ? <Lock className="w-4 h-4 text-muted-foreground/70" /> : <Icon className={`w-4 h-4 ${colors.text}`} />}
+                    <div className={`p-2 rounded-lg transition-colors ${colors.bg} ${colors.groupHoverBg}`}>
+                      <Icon className={`w-4 h-4 ${colors.text}`} />
                     </div>
                     <div className="min-w-0">
-                      <p className={`text-sm font-medium transition-colors truncate ${file.has_access === false ? 'text-muted-foreground/70 line-through' : 'text-foreground/90 group-hover:text-foreground'}`} title={file.file_name}>
+                      <p className="text-sm font-medium transition-colors truncate text-foreground/90 group-hover:text-foreground" title={file.file_name}>
                         {file.file_name}
                       </p>
                       <p className="text-xs text-muted-foreground mt-0.5 opacity-70 truncate" title={file.absolute_path || file.file_path}>
-                        {file.has_access === false ? 'Acceso no disponible 🚫' : `Modificado: ${new Date(file.last_modified).toLocaleDateString()}`}
+                        Modificado: {new Date(file.last_modified).toLocaleDateString()}
                       </p>
                     </div>
                   </div>
 
                   {/* Acciones */}
-                  {file.has_access !== false && (
-                    <div className="flex items-center gap-1 opacity-100 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity ml-2 shrink-0">
+                  <div className="flex items-center gap-1 opacity-100 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity ml-2 shrink-0">
                       <button 
                         onClick={() => handleOpen(file)}
                         title="Abrir ubicación" 
@@ -147,7 +160,6 @@ const FolderGroup = memo(function FolderGroup({
                         </button>
                       )}
                     </div>
-                  )}
                 </div>
               </div>
             );

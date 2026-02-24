@@ -41,6 +41,7 @@ export default function FileSearchChat({ onOpenConfig, onOpenAdmin }: FileSearch
   const [showClearModal, setShowClearModal] = useState(false);
   const [isMinimized, setIsMinimized] = useState(false);
   const [previewFile, setPreviewFile] = useState<FileRecord | null>(null);
+  const [updateInfo, setUpdateInfo] = useState<{version?: string, downloaded: boolean} | null>(null);
   
   // Custom dragging state for the bubble
   const [isDragging, setIsDragging] = useState(false);
@@ -53,8 +54,20 @@ export default function FileSearchChat({ onOpenConfig, onOpenAdmin }: FileSearch
     loadServerConfig();
     loadStats();
     addWelcomeMessage();
-    if ((window as any).electron?.getAppVersion) {
-      (window as any).electron.getAppVersion().then((v: string) => setAppVersion(v));
+    if ((window as any).electron) {
+      if ((window as any).electron.getAppVersion) {
+        (window as any).electron.getAppVersion().then((v: string) => setAppVersion(v));
+      }
+      if ((window as any).electron.onUpdateAvailable) {
+        (window as any).electron.onUpdateAvailable((version: string) => {
+          setUpdateInfo({ version, downloaded: false });
+        });
+      }
+      if ((window as any).electron.onUpdateDownloaded) {
+        (window as any).electron.onUpdateDownloaded((version: string) => {
+          setUpdateInfo({ version, downloaded: true });
+        });
+      }
     }
   }, []);
 
@@ -132,10 +145,16 @@ export default function FileSearchChat({ onOpenConfig, onOpenAdmin }: FileSearch
       setMessages(prev => [...prev, botMessage]);
     } catch (error: any) {
       console.error('Error en búsqueda:', error);
+      
+      let errorText = error.message || 'Ocurrió un error al buscar archivos. Por favor intenta nuevamente.';
+      if (errorText.toLowerCase().includes('failed to fetch') || errorText.toLowerCase().includes('network error') || errorText.toLowerCase().includes('fetch')) {
+        errorText = 'No se pudo conectar al servidor. Verifique su conexión de red o comuníquese con Soporte TI de Hellema Holland.';
+      }
+
       const errorMessage: Message = {
         id: (Date.now() + 1).toString(),
         role: 'bot',
-        text: error.message || 'Ocurrió un error al buscar archivos. Por favor intenta nuevamente.',
+        text: errorText,
         isError: true,
       };
       setMessages(prev => [...prev, errorMessage]);
@@ -334,6 +353,27 @@ export default function FileSearchChat({ onOpenConfig, onOpenAdmin }: FileSearch
           </div>
         </div>
       </header>
+
+      {updateInfo && (
+        <div className="bg-primary/10 border-b border-primary/20 px-6 py-3 flex items-center justify-between animate-fade-in shrink-0">
+          <div className="flex items-center gap-3">
+            <Bot className="w-5 h-5 text-primary" />
+            <p className="text-sm font-medium text-primary">
+              {updateInfo.downloaded 
+                ? `Nueva actualización ${updateInfo.version ? `v${updateInfo.version} ` : ''}lista para instalar.`
+                : `Descargando actualización ${updateInfo.version ? `v${updateInfo.version}` : ''}...`}
+            </p>
+          </div>
+          {updateInfo.downloaded && (
+            <button
+              onClick={() => (window as any).electron?.installUpdate?.()}
+              className="px-4 py-1.5 bg-primary text-primary-foreground text-xs font-bold rounded-lg hover:bg-primary/90 transition-all active:scale-95 shadow-sm"
+            >
+              Reiniciar y Actualizar
+            </button>
+          )}
+        </div>
+      )}
 
       {/* Chat Messages */}
       <main className="flex-1 overflow-y-auto px-6 py-10">

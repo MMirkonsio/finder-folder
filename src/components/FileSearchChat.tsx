@@ -259,11 +259,11 @@ export default function FileSearchChat({ onOpenConfig, onOpenAdmin }: FileSearch
         {/* Custom Title Bar / Drag Area */}
         <div 
           className="h-8 bg-card/80 backdrop-blur-md border-b border-border flex items-center justify-between px-4 shrink-0"
-        style={{ WebkitAppRegion: 'drag' } as any}
-      >
-        <p className="text-[9px] uppercase tracking-wider text-muted-foreground select-none" style={{ WebkitAppRegion: 'no-drag' } as any}>
-          {appVersion && `(v${appVersion})`}
-        </p>
+          style={{ WebkitAppRegion: 'drag' } as any}
+        >
+          <p className="text-[9px] uppercase tracking-wider text-muted-foreground select-none" style={{ WebkitAppRegion: 'no-drag' } as any}>
+            {appVersion && `(v${appVersion})`}
+          </p>
         <div className="flex items-center gap-1 relative z-50" style={{ WebkitAppRegion: 'no-drag' } as any}>
           <button 
             type="button"
@@ -310,7 +310,7 @@ export default function FileSearchChat({ onOpenConfig, onOpenAdmin }: FileSearch
               <img src="./img/LogoHHE 2.webp" alt="Logo Hellema Holland" className="h-8 object-contain" />
               </div>
               <div>
-                <h1 className="text-base font-bold tracking-tight">HellemaBOT</h1>
+                <h1 className="text-base font-bold tracking-tight">Hellema Holland BOT</h1>
                 <div className="flex items-center gap-2 mt-0.5">
                   <span className="flex h-1.5 w-1.5 rounded-full bg-green-500 animate-pulse" />
                   <p className="text-[9px] uppercase tracking-wider text-muted-foreground font-semibold">En línea</p>

@@ -23,14 +23,11 @@ export default function ServerConfig({ isOpen, onClose, onConfigSaved }: ServerC
   const [rootPaths, setRootPaths] = useState<string[]>(Array(10).fill(''));
   const [isLoading, setIsLoading] = useState(false);
   const [status, setStatus] = useState<{ type: 'success' | 'error', message: string } | null>(null);
-  const [appVersion, setAppVersion] = useState<string>('');
+
 
   useEffect(() => {
     if (isOpen) {
       loadConfig();
-      if ((window as any).electron && (window as any).electron.getAppVersion) {
-        (window as any).electron.getAppVersion().then((v: string) => setAppVersion(v));
-      }
     }
   }, [isOpen]);
 

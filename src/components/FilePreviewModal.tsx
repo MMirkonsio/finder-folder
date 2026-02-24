@@ -1,4 +1,4 @@
-import { X, ExternalLink } from 'lucide-react';
+import { X, ExternalLink, FileText } from 'lucide-react';
 import { FileRecord, getFileUrl } from '../lib/api';
 
 interface FilePreviewModalProps {
@@ -90,4 +90,4 @@ export default function FilePreviewModal({ file, serverUrl, onClose }: FilePrevi
   );
 }
 
-import { Bot, FileText } from 'lucide-react';
+

@@ -87,11 +87,19 @@ export default function FileSearchChat({ onOpenConfig, onOpenAdmin }: FileSearch
     }
   };
 
-  const addWelcomeMessage = () => {
+  const addWelcomeMessage = async () => {
+    let versionStr = '';
+    if ((window as any).electron && (window as any).electron.getAppVersion) {
+      try {
+        const v = await (window as any).electron.getAppVersion();
+        if (v) versionStr = ` (v${v})`;
+      } catch (e) {}
+    }
+
     const welcomeMessage: Message = {
       id: Date.now().toString(),
       role: 'bot',
-      text: '¡Hola! Soy tu asistente de búsqueda de archivos. ¿En qué puedo ayudarte hoy?',
+      text: `¡Hola! Soy HellemaBOT${versionStr}. Puedo ayudarte a encontrar archivos rápidamente en la red. ¿Qué estás buscando hoy?`,
     };
     setMessages([welcomeMessage]);
   };
@@ -143,11 +151,19 @@ export default function FileSearchChat({ onOpenConfig, onOpenAdmin }: FileSearch
     }
   };
 
-  const clearChat = () => {
+  const clearChat = async () => {
+    let versionStr = '';
+    if ((window as any).electron && (window as any).electron.getAppVersion) {
+      try {
+        const v = await (window as any).electron.getAppVersion();
+        if (v) versionStr = ` (v${v})`;
+      } catch (e) {}
+    }
+
     setMessages([{
       id: 'initial',
       role: 'bot',
-      text: '¡Hola! Soy HellemaBOT. Puedo ayudarte a encontrar archivos rápidamente en la red. ¿Qué estás buscando hoy?'
+      text: `¡Hola! Soy HellemaBOT${versionStr}. Puedo ayudarte a encontrar archivos rápidamente en la red. ¿Qué estás buscando hoy?`
     }]);
   };
 

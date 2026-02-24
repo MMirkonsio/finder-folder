@@ -9,6 +9,7 @@ import {
   Presentation,
   Table
 } from 'lucide-react';
+import { List, RowComponentProps } from 'react-window';
 import { FileRecord, getFileUrl } from '../lib/api';
 
 interface FolderGroupProps {
@@ -62,6 +63,83 @@ const FolderGroup = memo(function FolderGroup({
 
   if (accessibleFiles.length === 0) return null;
 
+  const ROW_HEIGHT = 65; // Altura aproximada de cada fila de archivo
+  const MAX_HEIGHT = 400; // Altura máxima antes de forzar scroll interno
+  const listHeight = Math.min(accessibleFiles.length * ROW_HEIGHT, MAX_HEIGHT);
+
+  const FileRow = ({ index, style }: RowComponentProps) => {
+    const file = accessibleFiles[index];
+    const isLast = index === accessibleFiles.length - 1;
+    const Icon = iconMap[file.file_type.toLowerCase()] || iconMap.default;
+    const colors = getFileColors(file.file_type);
+    const canPreview = ['pdf', 'jpg', 'jpeg', 'png'].includes(file.file_type.toLowerCase());
+
+    return (
+      <div style={style}>
+        <div key={file.id} className="relative flex flex-col ml-11 mr-3 h-[60px]">
+          {/* L-Shape Branch (Curva de la rama) */}
+          <div 
+            className="absolute border-l-[2px] border-b-[2px] border-border/50 rounded-bl-[16px] pointer-events-none z-0"
+            style={{
+              left: '-22px', 
+              top: index === 0 ? '-10px' : '-24px', 
+              bottom: '50%',
+              width: '22px' 
+            }}
+          />
+
+          {/* Vertical Trunk Line (Línea vertical) */}
+          {!isLast && (
+            <div 
+              className="absolute border-l-[2px] border-border/50 pointer-events-none z-0"
+              style={{
+                left: '-22px',
+                top: '50%', 
+                bottom: '-24px', 
+              }}
+            />
+          )}
+
+          <div className="relative z-10 flex items-center justify-between p-2 rounded-lg group transition-colors hover:bg-secondary/30">
+            <div className="flex items-center gap-3 min-w-0 flex-1">
+              <div className={`p-2 rounded-lg transition-colors ${colors.bg} ${colors.groupHoverBg}`}>
+                <Icon className={`w-4 h-4 ${colors.text}`} />
+              </div>
+              <div className="min-w-0">
+                <p className="text-sm font-medium transition-colors truncate text-foreground/90 group-hover:text-foreground" title={file.file_name}>
+                  {file.file_name}
+                </p>
+                <p className="text-xs text-muted-foreground mt-0.5 opacity-70 truncate" title={file.absolute_path || file.file_path}>
+                  Modificado: {new Date(file.last_modified).toLocaleDateString()}
+                </p>
+              </div>
+            </div>
+
+            {/* Acciones */}
+            <div className="flex items-center gap-1 opacity-100 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity ml-2 shrink-0">
+              <button 
+                onClick={() => handleOpen(file)}
+                title="Abrir ubicación" 
+                className="p-1.5 hover:bg-secondary rounded-md text-muted-foreground hover:text-foreground transition-colors"
+              >
+                <FolderOpen className="w-4 h-4"/>
+              </button>
+              {canPreview && (
+                <button 
+                  onClick={() => onPreview(file)}
+                  title="Ver archivo" 
+                  className="p-1.5 rounded-md transition-colors hover:bg-secondary text-muted-foreground hover:text-foreground"
+                >
+                  <Eye className="w-4 h-4"/>
+                </button>
+              )}
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  };
+
   return (
     <div className="mb-4 bg-card rounded-xl border border-border overflow-hidden shadow-sm">
       {/* Cabecera de la carpeta */}
@@ -80,79 +158,17 @@ const FolderGroup = memo(function FolderGroup({
         </div>
       </div>
 
-      {/* Lista de archivos */}
+      {/* Lista de archivos virtualizada */}
       {isOpen && (
         <div className="relative py-2">
-          {accessibleFiles.map((file, index) => {
-            const isLast = index === accessibleFiles.length - 1;
-            const Icon = iconMap[file.file_type.toLowerCase()] || iconMap.default;
-            const colors = getFileColors(file.file_type);
-            const canPreview = ['pdf', 'jpg', 'jpeg', 'png'].includes(file.file_type.toLowerCase());
-
-            return (
-              <div key={file.id} className="relative flex flex-col ml-11 mr-3 my-0.5">
-                
-                {/* L-Shape Branch (Curva de la rama) */}
-                <div 
-                  className="absolute border-l-[2px] border-b-[2px] border-border/50 rounded-bl-[16px] pointer-events-none z-0 transition-all duration-300"
-                  style={{
-                    left: '-22px', 
-                    top: index === 0 ? '-10px' : '-24px', 
-                    bottom: '50%',
-                    width: '22px' 
-                  }}
-                />
-
-                {/* Vertical Trunk Line (Línea vertical) */}
-                {!isLast && (
-                  <div 
-                    className="absolute border-l-[2px] border-border/50 pointer-events-none z-0 transition-all duration-300"
-                    style={{
-                      left: '-22px',
-                      top: '50%', 
-                      bottom: '-24px', 
-                    }}
-                  />
-                )}
-
-                <div className="relative z-10 flex items-center justify-between p-2 rounded-lg group transition-colors m-1 hover:bg-secondary/30">
-                  <div className="flex items-center gap-3 min-w-0 flex-1">
-                    <div className={`p-2 rounded-lg transition-colors ${colors.bg} ${colors.groupHoverBg}`}>
-                      <Icon className={`w-4 h-4 ${colors.text}`} />
-                    </div>
-                    <div className="min-w-0">
-                      <p className="text-sm font-medium transition-colors truncate text-foreground/90 group-hover:text-foreground" title={file.file_name}>
-                        {file.file_name}
-                      </p>
-                      <p className="text-xs text-muted-foreground mt-0.5 opacity-70 truncate" title={file.absolute_path || file.file_path}>
-                        Modificado: {new Date(file.last_modified).toLocaleDateString()}
-                      </p>
-                    </div>
-                  </div>
-
-                  {/* Acciones */}
-                  <div className="flex items-center gap-1 opacity-100 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity ml-2 shrink-0">
-                      <button 
-                        onClick={() => handleOpen(file)}
-                        title="Abrir ubicación" 
-                        className="p-1.5 hover:bg-secondary rounded-md text-muted-foreground hover:text-foreground transition-colors"
-                      >
-                        <FolderOpen className="w-4 h-4"/>
-                      </button>
-                      {canPreview && (
-                        <button 
-                          onClick={() => onPreview(file)}
-                          title="Ver archivo" 
-                          className="p-1.5 rounded-md transition-colors hover:bg-secondary text-muted-foreground hover:text-foreground"
-                        >
-                          <Eye className="w-4 h-4"/>
-                        </button>
-                      )}
-                    </div>
-                </div>
-              </div>
-            );
-          })}
+          <List
+            style={{ height: listHeight, width: '100%' }}
+            rowCount={accessibleFiles.length}
+            rowHeight={ROW_HEIGHT}
+            className="scrollbar-hide"
+            rowComponent={FileRow}
+            rowProps={{}}
+          />
         </div>
       )}
     </div>

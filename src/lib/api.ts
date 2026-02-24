@@ -52,6 +52,13 @@ export const getFileUrl = (fileId: string, configServerUrl?: string) => {
   return `${base}/api/files/${fileId}`;
 };
 
+export interface SearchResponse {
+  refine_needed?: boolean;
+  message?: string;
+  count?: number;
+  files?: FileRecord[];
+}
+
 export const api = {
   getStats: async () => {
     const response = await fetch(`${API_URL}/stats`);
@@ -59,7 +66,7 @@ export const api = {
     return response.json();
   },
   
-  searchFiles: async (query: string): Promise<FileRecord[]> => {
+  searchFiles: async (query: string): Promise<SearchResponse | FileRecord[]> => {
     const response = await fetch(`${API_URL}/search?q=${encodeURIComponent(query)}`);
     if (!response.ok) {
       const errorData = await response.json().catch(() => null);

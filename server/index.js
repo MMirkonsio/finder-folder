@@ -431,12 +431,24 @@ app.get('/api/search', async (req, res) => {
       return res.json(await mapWithAbsoluteAndAccess(results));
     }
 
-    // Split the query into individual keywords
+    // Extract exact phrases wrapped in quotes
+    const exactPhrases = [];
+    let cleanedQuery = rawQuery;
+    const phraseRegex = /"([^"]+)"/g;
+    let match;
+    while ((match = phraseRegex.exec(rawQuery)) !== null) {
+      if (match[1].trim().length > 0) {
+        exactPhrases.push(match[1].trim());
+      }
+    }
+    cleanedQuery = cleanedQuery.replace(phraseRegex, ' ').trim();
+
+    // Split the remaining query into individual keywords
     const SPANISH_STOP_WORDS = new Set([
-      'de', 'del', 'la', 'el', 'y', 'en', 'a', 'los', 'las', 'un', 'una', 'unos', 'unas', 'con', 'por', 'para', 'las', 'los', 'se', 'su', 'sus', 'o'
+      'de', 'del', 'la', 'el', 'y', 'en', 'a', 'los', 'las', 'un', 'una', 'unos', 'unas', 'con', 'por', 'para', 'se', 'su', 'sus', 'o'
     ]);
 
-    const keywords = rawQuery
+    const keywords = cleanedQuery
       .split(/\s+/)
       .filter(word => {
         // Keep numbers regardless of length
@@ -445,77 +457,107 @@ app.get('/api/search', async (req, res) => {
         return word.length > 2 && !SPANISH_STOP_WORDS.has(word);
       });
 
-    if (keywords.length === 0) {
-      // If query is very short or empty, just do a literal match of the raw input
-      const whereClause = {
-        file_name: { contains: rawQuery }
-      };
-      
-      const count = await prisma.fileRecord.count({ where: whereClause });
-      if (count > 5000) {
-        return res.status(400).json({ error: 'No se puede cargar la carpeta raíz debido a la gran cantidad de archivos detectados. Por favor, solo realiza búsquedas de archivos más específicos.' });
-      }
+    const allTerms = [...exactPhrases, ...keywords];
 
-      const singleMatch = await prisma.fileRecord.findMany({
-        where: whereClause,
-        orderBy: { last_modified: 'desc' }
-      });
-      return res.json(await mapWithAbsoluteAndAccess(singleMatch));
+    if (allTerms.length === 0) {
+      const fallbackTerm = rawQuery.replace(/"/g, '').trim();
+      if (fallbackTerm) allTerms.push(fallbackTerm);
     }
 
-    // MULTI-WORD AND LOGIC:
-    // PASS 1: Try strict AND logic. Every valid keyword must exist in the file path/name
-    const whereClauseAnd = {
-      AND: keywords.map(kw => ({
-        file_name: { contains: kw }
-      }))
+    if (allTerms.length === 0) {
+       return res.json([]);
+    }
+
+    // BOT RULES IMPLEMENTATION WITH TYPO FLEXIBILITY
+    const makeAccentInsensitive = (term) => term.replace(/[aeiouáéíóúü]/gi, '_');
+    
+    // Normalize terms to handle repeated characters (e.g., "nicoolas" -> "nicolas")
+    const normalizeTypo = (term) => {
+      if (term.length <= 3) return term;
+      return term.replace(/(.)\1+/g, '$1');
     };
 
-    const countAnd = await prisma.fileRecord.count({ where: whereClauseAnd });
-    if (countAnd > 5000) {
-      return res.status(400).json({ error: 'No se puede cargar la carpeta raíz debido a la gran cantidad de archivos detectados. Por favor, solo realiza búsquedas de archivos más específicos.' });
-    }
+    const getSqlForTerms = (terms) => {
+      const conditions = [];
+      const params = [];
+      const scoreParts = [];
+      const nameMatchParts = [];
+      
+      terms.forEach(term => {
+        const pattern = `%${makeAccentInsensitive(term.toLowerCase())}%`;
+        const normalizedPattern = `%${makeAccentInsensitive(normalizeTypo(term).toLowerCase())}%`;
+        
+        conditions.push(`(file_path LIKE ? OR file_path LIKE ?)`);
+        params.push(pattern, normalizedPattern);
+        
+        scoreParts.push(`(CASE WHEN file_path LIKE ? OR file_path LIKE ? THEN 1 ELSE 0 END)`);
+        nameMatchParts.push(`(CASE WHEN file_name LIKE ? OR file_name LIKE ? THEN 1 ELSE 0 END)`);
+      });
 
-    let results = await prisma.fileRecord.findMany({
-      where: whereClauseAnd,
-      orderBy: { last_modified: 'desc' }
-    });
+      return { conditions, params, scoreParts, nameMatchParts };
+    };
 
-    // PASS 2: If strict AND yields no results, try a flexible OR logic.
-    // This allows finding files that match some but not all of the keywords.
-    if (results.length === 0 && keywords.length > 1) {
-      console.log('No AND results found, falling back to OR search...');
-      const whereClauseOr = {
-        OR: keywords.map(kw => ({
-          file_name: { contains: kw }
-        }))
-      };
+    // PASS 1: Strict AND logic
+    const pass1 = getSqlForTerms(allTerms);
+    const whereAnd = pass1.conditions.join(' AND ');
+    const nameScoreAnd = pass1.nameMatchParts.join(' + ');
 
-      const countOr = await prisma.fileRecord.count({ where: whereClauseOr });
-      if (countOr > 5000) {
-        return res.status(400).json({ error: 'No se puede cargar la carpeta raíz debido a la gran cantidad de archivos detectados. Por favor, solo realiza búsquedas de archivos más específicos.' });
+    // Use Number() for count to avoid BigInt issues
+    const countResult = await prisma.$queryRawUnsafe(`SELECT COUNT(*) as count FROM "FileRecord" WHERE ${whereAnd}`, ...pass1.params);
+    let totalCount = Number(countResult[0]?.count || 0);
+    let rawResults = [];
+
+    if (totalCount > 0) {
+      // placeholders: nameScoreAnd (2*N) + whereAnd (2*N) = 4*N.
+      // params: ...pass1.params (2*N) + ...pass1.params (2*N) = 4*N. Correct!
+      const sqlQuery = `SELECT *, (${nameScoreAnd}) as _name_score FROM "FileRecord" WHERE ${whereAnd} ORDER BY _name_score DESC, last_modified DESC LIMIT 100`;
+      rawResults = await prisma.$queryRawUnsafe(sqlQuery, ...pass1.params, ...pass1.params);
+    } else if (allTerms.length > 0) {
+      // PASS 2: Flexible Fallback
+      const pass2 = getSqlForTerms(allTerms);
+      const matchScoreExpr = pass2.scoreParts.join(' + ');
+      const nameScoreExpr = pass2.nameMatchParts.join(' + ');
+      
+      // Use subquery to allow filtering by calculated _match_count
+      const sqlQuery = `
+        SELECT * FROM (
+          SELECT *, 
+            (${matchScoreExpr}) as _match_count,
+            (${nameScoreExpr}) as _name_score 
+          FROM "FileRecord"
+        ) as sub WHERE _match_count > 0
+        ORDER BY _match_count DESC, _name_score DESC, last_modified DESC 
+        LIMIT 100
+      `;
+      
+      // params: matchScoreExpr (2*N) + nameScoreExpr (2*N) = 4*N. Correct!
+      const results = await prisma.$queryRawUnsafe(sqlQuery, ...pass2.params, ...pass2.params);
+      
+      if (results.length > 0) {
+        const maxMatches = Number(results[0]._match_count);
+        // Requirement: match at least 60% of keywords OR (maxMatches - 1)
+        const threshold = Math.max(1, Math.floor(allTerms.length * 0.6), maxMatches - 1);
+        rawResults = results.filter(r => Number(r._match_count) >= threshold);
+        totalCount = rawResults.length;
       }
-
-      const orResults = await prisma.fileRecord.findMany({
-        where: whereClauseOr
-      });
-
-      // Score the results based on how many keywords they matched
-      const scoredResults = orResults.map(record => {
-        const textToSearch = record.file_name.toLowerCase();
-        let score = 0;
-        keywords.forEach(kw => {
-          if (textToSearch.includes(kw)) score++;
-        });
-        return { ...record, _score: score };
-      });
-
-      // Sort by score (highest first)
-      scoredResults.sort((a, b) => b._score - a._score);
-      results = scoredResults.map(({ _score, ...rest }) => rest);
     }
 
-    res.json(await mapWithAbsoluteAndAccess(results));
+    // 5. CERO RESULTADOS
+    if (totalCount === 0) {
+      return res.json([]);
+    }
+
+    // 4. PREVENCIÓN DE SATURACIÓN
+    if (totalCount > 10) {
+      return res.status(200).json({ 
+        refine_needed: true, 
+        count: totalCount,
+        message: `Encontré ${totalCount.toLocaleString()} archivos que coinciden con tu búsqueda. Por favor, especifica más detalles (como el mes o año) para encontrar el archivo correcto.`
+      });
+    }
+
+    const finalResults = rawResults.map(({ _name_score, _match_count, ...rest }) => rest);
+    res.json(await mapWithAbsoluteAndAccess(finalResults));
   } catch (error) {
     console.error('Search error:', error);
     res.status(500).json({ error: error.message });

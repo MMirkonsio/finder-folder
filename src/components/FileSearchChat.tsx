@@ -129,7 +129,22 @@ export default function FileSearchChat({ onOpenConfig, onOpenAdmin }: FileSearch
     setInput('');
 
     try {
-      const results = await api.searchFiles(query);
+      const resp = await api.searchFiles(query);
+      
+      let results: FileRecord[] = [];
+      let botText = '';
+      let isRefined = false;
+
+      if (Array.isArray(resp)) {
+        results = resp;
+      } else {
+        if (resp.refine_needed) {
+          isRefined = true;
+          botText = resp.message || 'Encontré demasiados archivos. Por favor, especifica más.';
+        } else {
+          results = resp.files || [];
+        }
+      }
 
       // Ordenar: más antiguos arriba, más nuevos abajo
       results.sort((a, b) => new Date(a.last_modified).getTime() - new Date(b.last_modified).getTime());
@@ -137,14 +152,18 @@ export default function FileSearchChat({ onOpenConfig, onOpenAdmin }: FileSearch
       const accessibleOnly = results.filter(f => f.has_access !== false);
       const allRestricted = results.length > 0 && accessibleOnly.length === 0;
 
-      const botMessage: Message = {
-        id: (Date.now() + 1).toString(),
-        role: 'bot',
-        text: accessibleOnly.length > 0
+      if (!isRefined) {
+        botText = accessibleOnly.length > 0
           ? `Encontré ${accessibleOnly.length} archivo${accessibleOnly.length > 1 ? 's' : ''} que coinciden con "${query}":`
           : results.length > 0 
             ? "" 
-            : `No encontré archivos que coincidan con "${query}". Intenta con otros términos.`,
+            : `No encontré archivos que coincidan con "${query}". Intenta con otros términos.`;
+      }
+
+      const botMessage: Message = {
+        id: (Date.now() + 1).toString(),
+        role: 'bot',
+        text: botText,
         files: results,
         hasRestrictedOnly: allRestricted
       };

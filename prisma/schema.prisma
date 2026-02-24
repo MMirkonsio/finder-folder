@@ -1,0 +1,47 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+  output   = "./generated/client"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model FileRecord {
+  id            String   @id @default(uuid())
+  file_name     String
+  file_path     String   @unique
+  file_size     Int
+  file_type     String
+  owner_user    String?
+  last_modified DateTime
+  created_at    DateTime @default(now())
+  updated_at    DateTime @updatedAt
+
+  @@index([file_name])
+  @@index([owner_user])
+  @@index([file_type])
+}
+
+model ServerConfig {
+  id          String   @id @default("default")
+  server_url  String
+  root_path   String?
+  root_path_2 String?
+  root_path_3 String?
+  root_path_4 String?
+  root_path_5 String?
+  root_path_6 String?
+  root_path_7 String?
+  root_path_8 String?
+  root_path_9 String?
+  root_path_10 String?
+  last_scan   DateTime?
+  total_files Int      @default(0)
+  created_at  DateTime @default(now())
+  updated_at  DateTime @updatedAt
+}

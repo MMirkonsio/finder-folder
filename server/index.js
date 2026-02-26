@@ -501,12 +501,19 @@ app.get('/api/search', async (req, res) => {
 
     const rawQuery = String(q).toLowerCase().trim();
     
+    // Extract numeric limits (e.g., "ultimas 6" -> limit 6)
+    let searchLimit = 50; // default for results
+    const limitMatch = rawQuery.match(/(?:ultimas?|primeras?|top)\s+(\d+)/i);
+    if (limitMatch) {
+      searchLimit = parseInt(limitMatch[1], 10);
+    }
+
     // Support for "usuario:" prefix
     if (rawQuery.startsWith('usuario:')) {
       const userName = rawQuery.replace('usuario:', '').trim();
       const results = await prisma.fileRecord.findMany({
         where: { owner_user: { contains: userName } },
-        take: 50,
+        take: searchLimit,
       });
       return res.json(await mapWithAbsoluteAndAccess(results));
     }
@@ -523,18 +530,25 @@ app.get('/api/search', async (req, res) => {
     }
     cleanedQuery = cleanedQuery.replace(phraseRegex, ' ').trim();
 
+    // List of months to prioritize them as keywords even if short
+    const MONTHS = ['enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio', 'julio', 'agosto', 'septiembre', 'octubre', 'noviembre', 'diciembre'];
+    
     // Split the remaining query into individual keywords
     const SPANISH_STOP_WORDS = new Set([
-      'de', 'del', 'la', 'el', 'y', 'en', 'a', 'los', 'las', 'un', 'una', 'unos', 'unas', 'con', 'por', 'para', 'se', 'su', 'sus', 'o'
+      'de', 'del', 'la', 'el', 'y', 'en', 'a', 'los', 'las', 'un', 'una', 'unos', 'unas', 'con', 'por', 'para', 'se', 'su', 'sus', 'o',
+      'busca', 'buscame', 'encuentra', 'dame', 'necesito', 'donde', 'esta', 'estan', 'archivo', 'archivos'
     ]);
 
     const keywords = cleanedQuery
       .split(/\s+/)
       .filter(word => {
-        // Keep numbers regardless of length
-        if (/^\d+$/.test(word)) return true;
+        const w = word.toLowerCase();
+        // Keep years (4 digits) and numbers
+        if (/^\d{1,4}$/.test(w)) return true;
+        // Keep months
+        if (MONTHS.includes(w)) return true;
         // Keep words with 2+ characters that are NOT stop words
-        return word.length > 2 && !SPANISH_STOP_WORDS.has(word);
+        return w.length > 2 && !SPANISH_STOP_WORDS.has(w);
       });
 
     const allTerms = [...exactPhrases, ...keywords];
@@ -605,7 +619,7 @@ app.get('/api/search', async (req, res) => {
        });
        semanticResults = docs.map(d => ({
           ...d,
-          _name_score: semanticScores.get(d.id) * 20, // Boost considerable para IA
+          _name_score: (semanticScores.get(d.id) || 0) * 25, // Boost considerable para IA
           _match_count: 5 
        }));
     }
@@ -654,11 +668,15 @@ app.get('/api/search', async (req, res) => {
            mergedMap.set(r.id, r);
        } else {
            const existing = mergedMap.get(r.id);
-           existing._name_score = Number(existing._name_score || 0) + Number(r._name_score || 0) + 10;
+           existing._name_score = Number(existing._name_score || 0) + Number(r._name_score || 0) + 15;
        }
     }
     
-    rawResults = Array.from(mergedMap.values()).sort((a, b) => Number(b._name_score || 0) - Number(a._name_score || 0)).slice(0, 100);
+    // Sort final list
+    rawResults = Array.from(mergedMap.values())
+        .sort((a, b) => Number(b._name_score || 0) - Number(a._name_score || 0))
+        .slice(0, Math.max(100, searchLimit));
+    
     totalCount = rawResults.length;
 
     // 5. CERO RESULTADOS
@@ -666,16 +684,20 @@ app.get('/api/search', async (req, res) => {
       return res.json([]);
     }
 
-    // 4. PREVENCIÓN DE SATURACIÓN
-    if (totalCount > 25) {
+    // Apply the limit if requested explicitly
+    const finalResults = rawResults.slice(0, searchLimit).map(({ _name_score, _match_count, ...rest }) => rest);
+
+    // 4. PREVENCIÓN DE SATURACIÓN (Aumentamos umbral a 50)
+    // Ahora enviamos los resultados de todas formas para que el usuario pueda ver los más relevantes
+    if (totalCount > 50) {
       return res.status(200).json({ 
         refine_needed: true, 
         count: totalCount,
-        message: `Encontré ${totalCount.toLocaleString()} archivos que coinciden con tu búsqueda. Por favor, especifica más detalles (como el mes o año) para encontrar el archivo correcto.`
+        message: `Encontré demasiados resultados. Te muestro los ${finalResults.length} más relevantes, si no ves tu archivo, por favor especifica más detalles (como el mes o año).`,
+        files: await mapWithAbsoluteAndAccess(finalResults)
       });
     }
 
-    const finalResults = rawResults.map(({ _name_score, _match_count, ...rest }) => rest);
     res.json(await mapWithAbsoluteAndAccess(finalResults));
   } catch (error) {
     console.error('Search error:', error);

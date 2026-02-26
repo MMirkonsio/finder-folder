@@ -141,6 +141,7 @@ export default function FileSearchChat({ onOpenConfig, onOpenAdmin }: FileSearch
         if (resp.refine_needed) {
           isRefined = true;
           botText = resp.message || 'Encontré demasiados archivos. Por favor, especifica más.';
+          results = resp.files || [];
         } else {
           results = resp.files || [];
         }
@@ -408,7 +409,7 @@ export default function FileSearchChat({ onOpenConfig, onOpenAdmin }: FileSearch
             const isBot = message.role === 'bot';
             return (
               <div key={message.id} className={`animate-fade-in flex ${isBot ? "" : "flex-row-reverse"}`}>
-                <div className={`max-w-full w-full space-y-4 ${isBot ? "" : "text-right"}`}>
+                <div className={`max-w-full w-full space-y-4 ${isBot ? "" : "flex flex-col items-end"}`}>
                   {/* Solo mostrar la burbuja si hay texto o es un error */}
                   {(message.text !== "" || message.isError) && (
                     <div className={`inline-block rounded-2xl px-5 py-3 text-sm shadow-sm border border-border/50 ${

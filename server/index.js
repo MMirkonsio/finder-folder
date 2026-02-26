@@ -17,6 +17,31 @@ const port = process.env.PORT || 3001;
 let extractorPipeline = null;
 const embeddingCache = new Map(); // id -> Float32Array
 
+async function ensureSchema() {
+  console.log('[Schema] Verificando integridad de la base de datos...');
+  try {
+    // Verificar FileRecord.embedding
+    const fileRecordCols = await prisma.$queryRawUnsafe(`PRAGMA table_info("FileRecord")`);
+    if (!fileRecordCols.find(c => c.name === 'embedding')) {
+      console.log('[Schema] Añadiendo columna embedding a FileRecord...');
+      await prisma.$executeRawUnsafe(`ALTER TABLE "FileRecord" ADD COLUMN "embedding" TEXT`);
+    }
+
+    // Verificar ServerConfig.root_path_2 a root_path_10
+    const configCols = await prisma.$queryRawUnsafe(`PRAGMA table_info("ServerConfig")`);
+    for (let i = 2; i <= 10; i++) {
+      const colName = `root_path_${i}`;
+      if (!configCols.find(c => c.name === colName)) {
+        console.log(`[Schema] Añadiendo columna ${colName} a ServerConfig...`);
+        await prisma.$executeRawUnsafe(`ALTER TABLE "ServerConfig" ADD COLUMN "${colName}" TEXT`);
+      }
+    }
+    console.log('[Schema] Base de datos verificada y actualizada.');
+  } catch (error) {
+    console.error('[Schema] Error verificando el esquema:', error);
+  }
+}
+
 async function initAI() {
   try {
     console.log('[AI] Cargando modelo de búsqueda semántica local (puede tardar la primera vez)...');
@@ -44,7 +69,12 @@ async function initAI() {
     console.error('[AI] Error crítico inicializando Transformers.js:', error);
   }
 }
-initAI();
+
+async function startUp() {
+  await ensureSchema();
+  await initAI();
+}
+startUp();
 
 function cosineSimilarity(A, B) {
   let dotProduct = 0, normA = 0, normB = 0;

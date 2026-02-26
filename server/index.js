@@ -5,12 +5,69 @@ const { PrismaClient } = pkg;
 import dotenv from 'dotenv';
 import fs from 'fs';
 import path from 'path';
+import { pipeline } from '@xenova/transformers';
 
 dotenv.config();
 
 const prisma = new PrismaClient();
 const app = express();
 const port = process.env.PORT || 3001;
+
+// ====== AI SEMANTIC SEARCH CORE ======
+let extractorPipeline = null;
+const embeddingCache = new Map(); // id -> Float32Array
+
+async function initAI() {
+  try {
+    console.log('[AI] Cargando modelo de búsqueda semántica local (puede tardar la primera vez)...');
+    extractorPipeline = await pipeline('feature-extraction', 'Xenova/all-MiniLM-L6-v2', {
+      quantized: true, // Use quantized for performance and low memory
+    });
+    console.log('[AI] Modelo cargado exitosamente.');
+    
+    console.log('[AI] Cargando vectores en caché (memoria RAM)...');
+    const records = await prisma.fileRecord.findMany({
+      where: { embedding: { not: null } },
+      select: { id: true, embedding: true }
+    });
+    let loaded = 0;
+    for (const r of records) {
+      if (r.embedding) {
+        try {
+          embeddingCache.set(r.id, new Float32Array(JSON.parse(r.embedding)));
+          loaded++;
+        } catch (e) {}
+      }
+    }
+    console.log(`[AI] Listo. ${loaded} vectores cargados en memoria para búsquedas instantáneas.`);
+  } catch (error) {
+    console.error('[AI] Error crítico inicializando Transformers.js:', error);
+  }
+}
+initAI();
+
+function cosineSimilarity(A, B) {
+  let dotProduct = 0, normA = 0, normB = 0;
+  for (let i = 0; i < A.length; i++) {
+    dotProduct += A[i] * B[i];
+    normA += A[i] * A[i];
+    normB += B[i] * B[i];
+  }
+  if (normA === 0 || normB === 0) return 0;
+  return dotProduct / (Math.sqrt(normA) * Math.sqrt(normB));
+}
+
+async function generateEmbedding(text) {
+  if (!extractorPipeline) return null;
+  try {
+    const output = await extractorPipeline(text, { pooling: 'mean', normalize: true });
+    return Array.from(output.data);
+  } catch (error) {
+    console.error('[AI] Error generating embedding:', error);
+    return null;
+  }
+}
+// =====================================
 
 app.use(cors());
 app.use(express.json({ limit: '100mb' }));
@@ -35,8 +92,20 @@ async function upsertBatch(batch) {
   if (batch.length === 0) return;
   
   try {
-    console.log(`Indexando lote de ${batch.length} archivos...`);
-    await prisma.$transaction(
+    console.log(`Indexando lote de ${batch.length} archivos... Calculando semántica (AI)...`);
+    // AI: Pre-calculate embeddings for the batch
+    if (extractorPipeline) {
+      for (const file of batch) {
+         if (!file.embedding) {
+            // Limpiamos la extensión para una busqueda mas limpia (ej. reporte_enero.pdf -> reporte_enero)
+            const cleanName = file.file_name.replace(/\.[^/.]+$/, "");
+            const emb = await generateEmbedding(cleanName);
+            if (emb) file.embedding = JSON.stringify(emb);
+         }
+      }
+    }
+
+    const results = await prisma.$transaction(
       batch.map(file => {
         const data = {
           file_name: file.file_name,
@@ -45,6 +114,7 @@ async function upsertBatch(batch) {
           file_type: file.file_type,
           owner_user: file.owner_user || '',
           last_modified: new Date(file.last_modified),
+          embedding: file.embedding || null,
         };
 
         return prisma.fileRecord.upsert({
@@ -54,6 +124,16 @@ async function upsertBatch(batch) {
         });
       })
     );
+
+    // AI: Cache embeddings in RAM for instant search
+    for (const r of results) {
+       if (r.embedding) {
+          try {
+             embeddingCache.set(r.id, new Float32Array(JSON.parse(r.embedding)));
+          } catch(e) {}
+       }
+    }
+    console.log(`[AI] Lote procesado con éxito. Vectores cacheados actualmente: ${embeddingCache.size}`);
   } catch (err) {
     console.error('Error upserting batch:', err.message);
   }
@@ -94,9 +174,10 @@ async function scanAndIndex(dir, context) {
           // Use 2-second tolerance for time (common for NAS/network shares)
           const isSameTime = dbInfo && Math.abs(dbInfo.lastModified - diskTime) < 2000;
           const isSameSize = dbInfo && dbInfo.size === diskSize;
+          const needsAI = dbInfo && !dbInfo.hasEmbedding;
 
-          if (dbInfo && isSameTime && isSameSize) {
-            // Unchanged file: Skip indexing but mark as processed immediately
+          if (dbInfo && isSameTime && isSameSize && !needsAI) {
+            // Unchanged file AND has Embedding: Skip indexing but mark as processed immediately
             syncStatus.processed++;
             context.skips++;
             
@@ -251,13 +332,12 @@ async function runIncrementalScan() {
       try {
         console.log(`[Auto-Scan] Iniciando escaneo en múltiples rutas:`, validRoots);
         
-        // 0. Fetch DB Snapshot for incremental check
         const dbFiles = await prisma.fileRecord.findMany({
-          select: { file_path: true, last_modified: true, file_size: true }
+          select: { file_path: true, last_modified: true, file_size: true, embedding: true }
         });
         const dbFilesMap = new Map(dbFiles.map(f => [
           f.file_path, 
-          { lastModified: f.last_modified.getTime(), size: f.file_size }
+          { lastModified: f.last_modified.getTime(), size: f.file_size, hasEmbedding: !!f.embedding }
         ]));
         console.log(`Snapshot DB cargado: ${dbFilesMap.size} archivos conocidos.`);
 
@@ -497,28 +577,56 @@ app.get('/api/search', async (req, res) => {
       return { conditions, params, scoreParts, nameMatchParts };
     };
 
-    // PASS 1: Strict AND logic
+    // === 1. BÚSQUEDA SEMÁNTICA CON IA (Prioridad) ===
+    let semanticTopIds = [];
+    let semanticScores = new Map();
+
+    if (extractorPipeline && rawQuery.length > 3) {
+      const queryEmbedding = await generateEmbedding(rawQuery);
+      if (queryEmbedding && embeddingCache.size > 0) {
+         const qEmb = new Float32Array(queryEmbedding);
+         for (const [id, emb] of embeddingCache.entries()) {
+             const score = cosineSimilarity(qEmb, emb);
+             if (score > 0.35) { // 0.35 es un buen umbral para all-MiniLM-L6-v2
+                semanticScores.set(id, score);
+             }
+         }
+         semanticTopIds = Array.from(semanticScores.entries())
+             .sort((a,b) => b[1] - a[1])
+             .slice(0, 100) // top 100 matches semánticos
+             .map(x => x[0]);
+      }
+    }
+
+    let semanticResults = [];
+    if (semanticTopIds.length > 0) {
+       const docs = await prisma.fileRecord.findMany({
+          where: { id: { in: semanticTopIds } }
+       });
+       semanticResults = docs.map(d => ({
+          ...d,
+          _name_score: semanticScores.get(d.id) * 20, // Boost considerable para IA
+          _match_count: 5 
+       }));
+    }
+
+    // === 2. BÚSQUEDA TRADICIONAL CLÁSICA (Respaldo) ===
     const pass1 = getSqlForTerms(allTerms);
     const whereAnd = pass1.conditions.join(' AND ');
     const nameScoreAnd = pass1.nameMatchParts.join(' + ');
 
-    // Use Number() for count to avoid BigInt issues
     const countResult = await prisma.$queryRawUnsafe(`SELECT COUNT(*) as count FROM "FileRecord" WHERE ${whereAnd}`, ...pass1.params);
     let totalCount = Number(countResult[0]?.count || 0);
     let rawResults = [];
 
     if (totalCount > 0) {
-      // placeholders: nameScoreAnd (2*N) + whereAnd (2*N) = 4*N.
-      // params: ...pass1.params (2*N) + ...pass1.params (2*N) = 4*N. Correct!
       const sqlQuery = `SELECT *, (${nameScoreAnd}) as _name_score FROM "FileRecord" WHERE ${whereAnd} ORDER BY _name_score DESC, last_modified DESC LIMIT 100`;
       rawResults = await prisma.$queryRawUnsafe(sqlQuery, ...pass1.params, ...pass1.params);
     } else if (allTerms.length > 0) {
-      // PASS 2: Flexible Fallback
       const pass2 = getSqlForTerms(allTerms);
       const matchScoreExpr = pass2.scoreParts.join(' + ');
       const nameScoreExpr = pass2.nameMatchParts.join(' + ');
       
-      // Use subquery to allow filtering by calculated _match_count
       const sqlQuery = `
         SELECT * FROM (
           SELECT *, 
@@ -529,18 +637,29 @@ app.get('/api/search', async (req, res) => {
         ORDER BY _match_count DESC, _name_score DESC, last_modified DESC 
         LIMIT 100
       `;
-      
-      // params: matchScoreExpr (2*N) + nameScoreExpr (2*N) = 4*N. Correct!
       const results = await prisma.$queryRawUnsafe(sqlQuery, ...pass2.params, ...pass2.params);
       
       if (results.length > 0) {
         const maxMatches = Number(results[0]._match_count);
-        // Requirement: match at least 60% of keywords OR (maxMatches - 1)
         const threshold = Math.max(1, Math.floor(allTerms.length * 0.6), maxMatches - 1);
         rawResults = results.filter(r => Number(r._match_count) >= threshold);
-        totalCount = rawResults.length;
       }
     }
+
+    // === 3. FUSIÓN Y ORDENAMIENTO (IA + Tradicional) ===
+    const mergedMap = new Map();
+    for (const r of rawResults) mergedMap.set(r.id, r);
+    for (const r of semanticResults) {
+       if (!mergedMap.has(r.id)) {
+           mergedMap.set(r.id, r);
+       } else {
+           const existing = mergedMap.get(r.id);
+           existing._name_score = Number(existing._name_score || 0) + Number(r._name_score || 0) + 10;
+       }
+    }
+    
+    rawResults = Array.from(mergedMap.values()).sort((a, b) => Number(b._name_score || 0) - Number(a._name_score || 0)).slice(0, 100);
+    totalCount = rawResults.length;
 
     // 5. CERO RESULTADOS
     if (totalCount === 0) {
@@ -548,7 +667,7 @@ app.get('/api/search', async (req, res) => {
     }
 
     // 4. PREVENCIÓN DE SATURACIÓN
-    if (totalCount > 10) {
+    if (totalCount > 25) {
       return res.status(200).json({ 
         refine_needed: true, 
         count: totalCount,

@@ -28,3 +28,18 @@ dev.db
 prisma/dev.db
 bfg.jar
 dist/
+prisma/generated/
+*.sqlite
+*.sqlite-journal
+*.tmp
+*.bak
+*.old
+*.zip
+*.rar
+*.7z
+*.exe
+.idea/*
+.vscode/*
+! .vscode/extensions.json
+.vscode/settings.json
+.vscode/launch.json

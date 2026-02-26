@@ -19,6 +19,7 @@ model FileRecord {
   file_type     String
   owner_user    String?
   last_modified DateTime
+  embedding     String?  // JSON stringified array of floats
   created_at    DateTime @default(now())
   updated_at    DateTime @updatedAt
 

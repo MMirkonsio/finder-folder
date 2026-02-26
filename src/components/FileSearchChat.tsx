@@ -444,7 +444,7 @@ export default function FileSearchChat({ onOpenConfig, onOpenAdmin }: FileSearch
                   {message.files && message.files.length > 0 && (
                     <div className="w-full mt-4 flex flex-col text-left">
                       {Object.entries(groupFilesByPath(message.files)).map(([path, files]) => (
-                        <FolderGroup 
+                        <FolderGroup  
                           key={path} 
                           path={path} 
                           files={files} 

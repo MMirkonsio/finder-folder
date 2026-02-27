@@ -174,7 +174,7 @@ function startServer() {
   // Or in app.asar depending on builder config
   const projectRoot = isDev 
     ? path.join(__dirname, '..')
-    : path.join(process.resourcesPath, 'app.asar.unpacked');
+    : path.join(process.resourcesPath, 'app');
 
   const serverPath = path.join(projectRoot, 'server', 'index.js');
   console.log(`Ruta del servidor resuelta: ${serverPath}`);

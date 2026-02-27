@@ -73,7 +73,12 @@ export default function FileSearchChat({ onOpenConfig, onOpenAdmin }: FileSearch
   }, []);
 
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    // Solo hacemos scroll al fondo mientras se lanza la búsqueda.
+    // Esto evita que al recibir una lista larga de resultados, la vista salte al final,
+    // permitiendo al usuario ver el primer y más exacto resultado en la parte superior.
+    if (isSearching) {
+      messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    }
   }, [messages, isSearching]);
 
   // Asegurar scroll al fondo cuando se restaura la ventana
@@ -147,8 +152,8 @@ export default function FileSearchChat({ onOpenConfig, onOpenAdmin }: FileSearch
         }
       }
 
-      // Ordenar: más antiguos arriba, más nuevos abajo
-      results.sort((a, b) => new Date(a.last_modified).getTime() - new Date(b.last_modified).getTime());
+      // No ordenamos por fecha aquí para respetar la prioridad de RELEVANCIA/IA de la base de datos.
+      // results.sort((a, b) => new Date(b.last_modified).getTime() - new Date(a.last_modified).getTime());
 
       const accessibleOnly = results.filter(f => f.has_access !== false);
       const allRestricted = results.length > 0 && accessibleOnly.length === 0;

@@ -51,20 +51,40 @@ async function initAI() {
     console.log('[AI] Modelo cargado exitosamente.');
     
     console.log('[AI] Cargando vectores en caché (memoria RAM)...');
-    const records = await prisma.fileRecord.findMany({
-      where: { embedding: { not: null } },
-      select: { id: true, embedding: true }
+    
+    // WORKAROUND: Bypass Prisma complete for this specific heavy duty query
+    // Because parsing thousand of large JSON strings crashes Prisma's Rust->N-API converter
+    const sqlite3 = await import('sqlite3');
+    const dbPath = process.env.DATABASE_URL.replace('file:', '');
+    
+    await new Promise((resolve, reject) => {
+      const db = new sqlite3.default.Database(dbPath, (err) => {
+        if (err) return reject(err);
+      });
+
+      let loaded = 0;
+      db.each(`SELECT id, embedding FROM "FileRecord" WHERE embedding IS NOT NULL`, 
+        (err, row) => {
+          if (err) {
+            console.error('[AI] DB row error:', err);
+            return;
+          }
+          if (row.embedding) {
+            try {
+              embeddingCache.set(row.id, new Float32Array(JSON.parse(row.embedding)));
+              loaded++;
+            } catch (e) {}
+          }
+        }, 
+        (err, count) => {
+          db.close();
+          if (err) return reject(err);
+          console.log(`[AI] Listo. ${loaded} vectores cargados en memoria para búsquedas instantáneas.`);
+          resolve();
+        }
+      );
     });
-    let loaded = 0;
-    for (const r of records) {
-      if (r.embedding) {
-        try {
-          embeddingCache.set(r.id, new Float32Array(JSON.parse(r.embedding)));
-          loaded++;
-        } catch (e) {}
-      }
-    }
-    console.log(`[AI] Listo. ${loaded} vectores cargados en memoria para búsquedas instantáneas.`);
+
   } catch (error) {
     console.error('[AI] Error crítico inicializando Transformers.js:', error);
   }
@@ -631,13 +651,15 @@ app.get('/api/search', async (req, res) => {
          const qEmb = new Float32Array(queryEmbedding);
          for (const [id, emb] of embeddingCache.entries()) {
              const score = cosineSimilarity(qEmb, emb);
-             if (score > 0.35) { // 0.35 es un buen umbral para all-MiniLM-L6-v2
+             const umbralMinimo = 0.95; // Filtro estricto para eliminar basura de la IA
+             if (score >= umbralMinimo) {
                 semanticScores.set(id, score);
              }
          }
+         // ORDEN: Dejamos el más exacto arriba (filtrado previo por umbral)
          semanticTopIds = Array.from(semanticScores.entries())
              .sort((a,b) => b[1] - a[1])
-             .slice(0, 100) // top 100 matches semánticos
+             .slice(0, 100) // tope para no saturar memoria externa
              .map(x => x[0]);
       }
     }
@@ -649,7 +671,7 @@ app.get('/api/search', async (req, res) => {
        });
        semanticResults = docs.map(d => ({
           ...d,
-          _name_score: (semanticScores.get(d.id) || 0) * 25, // Boost considerable para IA
+          _name_score: (semanticScores.get(d.id) || 0) * 15,
           _match_count: 5 
        }));
     }
@@ -685,26 +707,47 @@ app.get('/api/search', async (req, res) => {
       
       if (results.length > 0) {
         const maxMatches = Number(results[0]._match_count);
-        const threshold = Math.max(1, Math.floor(allTerms.length * 0.6), maxMatches - 1);
+        // Exigir al menos el 75% de las palabras buscadas para no inundar con genéricos
+        const minRequired = Math.ceil(allTerms.length * 0.75);
+        const threshold = Math.max(minRequired, maxMatches - 1);
+        
         rawResults = results.filter(r => Number(r._match_count) >= threshold);
       }
     }
 
     // === 3. FUSIÓN Y ORDENAMIENTO (IA + Tradicional) ===
     const mergedMap = new Map();
+    const hasExactMatches = rawResults.length > 0;
+    
+    // Put exact matches first
     for (const r of rawResults) mergedMap.set(r.id, r);
+    
     for (const r of semanticResults) {
+       const score = semanticScores.get(r.id) || 0;
        if (!mergedMap.has(r.id)) {
-           mergedMap.set(r.id, r);
+           // Si tenemos coincidencias exactas (ej. estamos buscando a una persona específica), 
+           // limitamos que la IA introduzca archivos basura a menos que su puntaje sea muy alto
+           const aiThreshold = hasExactMatches ? 0.70 : 0.65;
+           
+           if (score >= aiThreshold) {
+               mergedMap.set(r.id, r);
+           }
        } else {
+           // Si el archivo ya fue encontrado por palabras exactas Y la IA, se le da un gran impulso
            const existing = mergedMap.get(r.id);
-           existing._name_score = Number(existing._name_score || 0) + Number(r._name_score || 0) + 15;
+           existing._name_score = Number(existing._name_score || 0) + (score * 50);
        }
     }
     
-    // Sort final list
+    // Sort final list: Prioridad RELEVANCIA (IA/Texto) primero, luego FECHA como desempate
     rawResults = Array.from(mergedMap.values())
-        .sort((a, b) => Number(b._name_score || 0) - Number(a._name_score || 0))
+        .sort((a, b) => {
+            const scoreDiff = Number(b._name_score || 0) - Number(a._name_score || 0);
+            if (Math.abs(scoreDiff) > 0.01) return scoreDiff; // Si hay diferencia de relevancia notable, manda la relevancia
+            
+            // Si la relevancia es casi idéntica (desempate), manda el más nuevo
+            return new Date(b.last_modified).getTime() - new Date(a.last_modified).getTime();
+        })
         .slice(0, Math.max(100, searchLimit));
     
     totalCount = rawResults.length;

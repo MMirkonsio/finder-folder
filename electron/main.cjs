@@ -340,17 +340,30 @@ if (!gotTheLock) {
     });
 
     if (!isDev) {
-      autoUpdater.autoDownload = true;
-      autoUpdater.autoInstallOnAppQuit = true;
-      autoUpdater.checkForUpdates();
+      try {
+        autoUpdater.autoDownload = true;
+        autoUpdater.autoInstallOnAppQuit = true;
 
-      autoUpdater.on('update-available', (info) => {
-        if (mainWindow) mainWindow.webContents.send('update-available', info.version);
-      });
+        // Handler de errores OBLIGATORIO — sin esto, fallos de red lanzan unhandled rejection
+        autoUpdater.on('error', (err) => {
+          console.warn('[AutoUpdater] Error:', err?.message || err);
+        });
 
-      autoUpdater.on('update-downloaded', (info) => {
-        if (mainWindow) mainWindow.webContents.send('update-downloaded', info.version);
-      });
+        autoUpdater.on('update-available', (info) => {
+          if (mainWindow) mainWindow.webContents.send('update-available', info.version);
+        });
+
+        autoUpdater.on('update-downloaded', (info) => {
+          if (mainWindow) mainWindow.webContents.send('update-downloaded', info.version);
+        });
+
+        // Check con catch — si no hay internet o GitHub está caído, NO crashea la app
+        autoUpdater.checkForUpdates().catch((e) =>
+          console.warn('[AutoUpdater] Check failed:', e?.message || e)
+        );
+      } catch (e) {
+        console.error('[AutoUpdater] Setup failed:', e?.message || e);
+      }
     }
   });
 

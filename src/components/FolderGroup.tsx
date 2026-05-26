@@ -1,9 +1,10 @@
 import React, { useState, memo } from 'react';
-import { 
-  FileText, 
-  Eye, 
+import {
+  FileText,
+  Eye,
   FolderOpen,
-  ChevronDown, 
+  Folder,
+  ChevronDown,
   ChevronRight,
   FileSpreadsheet,
   Presentation,
@@ -11,6 +12,17 @@ import {
 } from 'lucide-react';
 import { List, RowComponentProps } from 'react-window';
 import { FileRecord, getFileUrl } from '../lib/api';
+
+// Detecta y elimina prefijos UNC (//host/share/ o \\host\share\) para mostrar
+// solo la parte interna del NAS como breadcrumbs.
+const NETWORK_PREFIX_RE = /^[\/\\]+[^\/\\]+[\/\\]+[^\/\\]+[\/\\]?/;
+
+const pathToBreadcrumbs = (rawPath: string): string[] => {
+  if (!rawPath) return [];
+  const stripped = rawPath.replace(NETWORK_PREFIX_RE, '');
+  if (!stripped) return [];
+  return stripped.split(/[\/\\]+/).filter(Boolean);
+};
 
 interface FolderGroupProps {
   path: string;
@@ -140,17 +152,43 @@ const FolderGroup = memo(function FolderGroup({
     );
   };
 
+  const breadcrumbs = pathToBreadcrumbs(path);
+
   return (
     <div className="mb-4 bg-card rounded-xl border border-border overflow-hidden shadow-sm">
-      {/* Cabecera de la carpeta */}
-      <div 
-        onClick={() => setIsOpen(!isOpen)} 
+      {/* Cabecera con breadcrumbs (ruta amigable, sin IP/share) */}
+      <div
+        onClick={() => setIsOpen(!isOpen)}
         className="flex items-center justify-between p-3 bg-secondary/20 hover:bg-secondary/40 cursor-pointer transition-colors border-b border-border"
       >
-        <div className="flex items-center gap-3 w-full min-w-0 pr-4">
-          <h3 className="font-medium text-xs text-foreground tracking-wide truncate" title={path || '/'}>{path || '/'}</h3>
+        <div className="flex items-center gap-2 w-full min-w-0 pr-4" title={path || '/'}>
+          <Folder className="w-3.5 h-3.5 text-primary shrink-0" />
+          <h3 className="text-xs tracking-wide truncate">
+            {breadcrumbs.length === 0 ? (
+              <span className="text-muted-foreground italic">Raíz del servidor</span>
+            ) : (
+              breadcrumbs.map((seg, i) => (
+                <React.Fragment key={i}>
+                  {i > 0 && (
+                    <span className="mx-1.5 text-muted-foreground/50 select-none">›</span>
+                  )}
+                  <span
+                    className={
+                      i === 0
+                        ? 'font-semibold text-foreground'
+                        : i === breadcrumbs.length - 1
+                          ? 'text-foreground/80'
+                          : 'text-muted-foreground'
+                    }
+                  >
+                    {seg}
+                  </span>
+                </React.Fragment>
+              ))
+            )}
+          </h3>
         </div>
-        <div className="flex items-center gap-3 text-muted-foreground">
+        <div className="flex items-center gap-3 text-muted-foreground shrink-0">
           <span className="text-xs bg-secondary/50 px-2 py-1 rounded-full text-foreground">
             {accessibleFiles.length} archivo{accessibleFiles.length !== 1 ? 's' : ''}
           </span>

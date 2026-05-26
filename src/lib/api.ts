@@ -120,7 +120,7 @@ export const api = {
     return response.json();
   },
   
-  saveConfig: async (config: Partial<ServerConfig>) => {
+  saveConfig: async (config: Partial<ServerConfig>): Promise<ServerConfig & { invalidPaths?: string[] }> => {
     const response = await fetch(`${API_URL}/config`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },

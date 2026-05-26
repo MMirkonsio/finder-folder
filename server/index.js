@@ -258,6 +258,7 @@ async function processFile(file, context) {
     }
   } catch (err) {
     console.error(`Error reading ${file.fullPath}:`, err.message);
+    if (context.currentRoot) context.rootsWithErrors.add(context.currentRoot);
   }
 }
 
@@ -274,6 +275,7 @@ async function scanAndIndex(dir, context) {
     dirMtime = dirStats.mtime.getTime();
   } catch (err) {
     console.error(`Error stat'ing dir ${dir}:`, err.message);
+    if (context.currentRoot) context.rootsWithErrors.add(context.currentRoot);
     return;
   }
 
@@ -287,6 +289,7 @@ async function scanAndIndex(dir, context) {
     items = await fs.promises.readdir(dir, { withFileTypes: true });
   } catch (err) {
     console.error(`Error reading dir ${dir}:`, err.message);
+    if (context.currentRoot) context.rootsWithErrors.add(context.currentRoot);
     return;
   }
 
@@ -510,6 +513,8 @@ async function runIncrementalScan(specificPaths = null) {
           dbFilesMap: dbFilesMap,
           dirCache: dirCache,           // mtimes previamente vistos
           dirCacheUpdates: new Map(),   // mtimes nuevos a persistir al final
+          rootsWithErrors: new Set(),   // raíces con cualquier error de I/O — se saltan en limpieza
+          currentRoot: null,            // raíz que se está escaneando actualmente
           skips: 0,
           updates: 0
         };
@@ -518,6 +523,7 @@ async function runIncrementalScan(specificPaths = null) {
         for (const root of validRoots) {
           if (syncStatus.cancelRequested) break;
           console.log(`\n>>> Escaneando ruta: ${root}`);
+          context.currentRoot = root.replace(/\\/g, '/');
           await scanAndIndex(root, context);
         }
 
@@ -549,13 +555,19 @@ async function runIncrementalScan(specificPaths = null) {
           }
         }
 
-        // 3. Handle deletions (Cleanup) — SOLO si NO fue cancelado.
-        //    Si se cancela, no podemos confiar en que allDiscoveredPaths esté completo,
-        //    así que saltar la limpieza evita borrar archivos válidos por error.
+        // 3. Handle deletions (Cleanup) — solo si NO fue cancelado y la raíz se escaneó sin errores.
+        //    Si una raíz tuvo errores (NAS desconectado, permisos, etc.), su allDiscoveredPaths
+        //    está incompleto y borrar basado en eso eliminaría archivos válidos por error.
         if (!syncStatus.cancelRequested) {
           syncStatus.status = 'deleting';
           for (const root of validRoots) {
             const normalizedRootPath = root.replace(/\\/g, '/');
+
+            // Safety: si esta raíz tuvo cualquier error de I/O, saltar limpieza.
+            if (context.rootsWithErrors.has(normalizedRootPath)) {
+              console.warn(`[Scan] Saltando limpieza de ${root}: hubo errores durante el escaneo. Reintenta cuando la ruta esté estable.`);
+              continue;
+            }
 
             const currentDbFiles = await prisma.fileRecord.findMany({
               where: {
@@ -959,36 +971,53 @@ app.get('/api/config', async (req, res) => {
 });
 
 app.post('/api/config', async (req, res) => {
-  const { 
-    server_url, 
-    root_path, root_path_2, root_path_3, root_path_4, 
-    root_path_5, root_path_6, root_path_7, root_path_8, 
-    root_path_9, root_path_10 
+  const {
+    server_url,
+    root_path, root_path_2, root_path_3, root_path_4,
+    root_path_5, root_path_6, root_path_7, root_path_8,
+    root_path_9, root_path_10
   } = req.body;
   console.log('[API Config POST] Iniciando guardado de configuración...');
   try {
     const defaultServerUrl = server_url || '';
-    const updateData = { 
-      server_url: defaultServerUrl, 
+    const updateData = {
+      server_url: defaultServerUrl,
       root_path, root_path_2, root_path_3, root_path_4,
       root_path_5, root_path_6, root_path_7, root_path_8,
       root_path_9, root_path_10
     };
-    const createData = { 
-      id: 'default', 
-      server_url: defaultServerUrl, 
+    const createData = {
+      id: 'default',
+      server_url: defaultServerUrl,
       root_path, root_path_2, root_path_3, root_path_4,
       root_path_5, root_path_6, root_path_7, root_path_8,
       root_path_9, root_path_10,
-      total_files: 0 
+      total_files: 0
     };
-    
+
     const config = await prisma.serverConfig.upsert({
       where: { id: 'default' },
       update: updateData,
       create: createData,
     });
-    res.json(config);
+
+    // Validación post-save: detectar rutas que no existen/no son accesibles.
+    // Solo informativo — el guardado YA se hizo. La UI puede mostrar un warning.
+    const allPaths = [
+      root_path, root_path_2, root_path_3, root_path_4, root_path_5,
+      root_path_6, root_path_7, root_path_8, root_path_9, root_path_10
+    ].filter(p => p && typeof p === 'string' && p.trim() !== '');
+
+    const invalidPaths = [];
+    for (const p of allPaths) {
+      try {
+        if (!fs.existsSync(p)) invalidPaths.push(p);
+      } catch {
+        invalidPaths.push(p);
+      }
+    }
+
+    res.json({ ...config, invalidPaths: invalidPaths.length > 0 ? invalidPaths : undefined });
   } catch (error) {
     console.error('[API Config Error - POST]:', error);
     res.status(500).json({ error: error.message });

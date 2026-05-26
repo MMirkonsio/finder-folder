@@ -60,7 +60,7 @@ export default function ServerConfig({ isOpen, onClose, onConfigSaved }: ServerC
     setStatus(null);
 
     try {
-      await api.saveConfig({
+      const result = await api.saveConfig({
         server_url: serverUrl,
         root_path: rootPaths[0],
         root_path_2: rootPaths[1],
@@ -73,9 +73,20 @@ export default function ServerConfig({ isOpen, onClose, onConfigSaved }: ServerC
         root_path_9: rootPaths[8],
         root_path_10: rootPaths[9],
       });
-      setStatus({ type: 'success', message: 'Configuración guardada correctamente' });
-      onConfigSaved();
-      setTimeout(() => onClose(), 1500);
+
+      const invalidPaths = result?.invalidPaths || [];
+      if (invalidPaths.length > 0) {
+        // Guardado OK pero hay rutas no accesibles — avisar al usuario sin auto-cerrar
+        setStatus({
+          type: 'error',
+          message: `Guardado. ⚠️ ${invalidPaths.length} ruta${invalidPaths.length > 1 ? 's' : ''} no accesible${invalidPaths.length > 1 ? 's' : ''} (¿NAS desconectado o nombre incorrecto?)`,
+        });
+        onConfigSaved();
+      } else {
+        setStatus({ type: 'success', message: 'Configuración guardada correctamente' });
+        onConfigSaved();
+        setTimeout(() => onClose(), 1500);
+      }
     } catch (error: any) {
       setStatus({ type: 'error', message: error.message || 'Error al guardar la configuración' });
     } finally {

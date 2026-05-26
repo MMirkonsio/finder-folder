@@ -1,11 +1,11 @@
-import { 
-  FileText, 
-  Table, 
-  FileSpreadsheet, 
-  Presentation, 
-  Eye, 
-  FolderOpen, 
-  EyeOff 
+import {
+  FileText,
+  Table,
+  FileSpreadsheet,
+  Presentation,
+  Eye,
+  FolderOpen,
+  EyeOff
 } from "lucide-react";
 import { useState } from "react";
 import { FileRecord, getFileUrl } from '../lib/api';
@@ -28,20 +28,18 @@ const iconMap: Record<string, React.ElementType> = {
   default: FileText,
 };
 
+const getFileColors = (type: string) => {
+  const t = type.toLowerCase();
+  if (t === 'pdf') return { text: 'text-red-500', bg: 'bg-red-500/15' };
+  if (['doc', 'docx'].includes(t)) return { text: 'text-blue-500', bg: 'bg-blue-500/15' };
+  if (['xls', 'xlsx', 'csv'].includes(t)) return { text: 'text-green-500', bg: 'bg-green-500/15' };
+  return { text: 'text-primary', bg: 'bg-primary/15' };
+};
+
 export default function FileResult({ file, serverUrl }: FileResultProps) {
   const [showPreview, setShowPreview] = useState(false);
 
   const Icon = iconMap[file.file_type.toLowerCase()] || iconMap.default;
-
-
-
-  const getFileColors = (type: string) => {
-    const t = type.toLowerCase();
-    if (t === 'pdf') return { text: 'text-red-500', bg: 'bg-red-500/15' };
-    if (['doc', 'docx'].includes(t)) return { text: 'text-blue-500', bg: 'bg-blue-500/15' };
-    if (['xls', 'xlsx', 'csv'].includes(t)) return { text: 'text-green-500', bg: 'bg-green-500/15' };
-    return { text: 'text-primary', bg: 'bg-primary/15' };
-  };
 
   const handleOpen = () => {
     // Attempt to use the native Electron shell to open the folder locally

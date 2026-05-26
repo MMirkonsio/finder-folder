@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
-import { Database, Loader, CheckCircle, AlertCircle, RefreshCw, X } from 'lucide-react';
+import { Database, Loader, CheckCircle, AlertCircle, RefreshCw, X, Square } from 'lucide-react';
 import { api, SyncStatus } from '../lib/api';
 
 interface AdminPanelProps {
@@ -68,6 +68,23 @@ export default function AdminPanel({ isOpen, onClose }: AdminPanelProps) {
     if (pollingRef.current) {
       clearInterval(pollingRef.current);
       pollingRef.current = null;
+    }
+  };
+
+  const handleCancelScan = async () => {
+    // Feedback inmediato: marcar el status como "cancelando" sin esperar al servidor
+    if (currentStatus) {
+      setCurrentStatus({ ...currentStatus, cancelRequested: true, currentFile: 'Cancelando...' });
+    }
+    try {
+      await api.cancelScan();
+      // Forzar un refresh inmediato del status para confirmar
+      try {
+        const status = await api.getSyncStatus();
+        setCurrentStatus(status);
+      } catch {}
+    } catch (error) {
+      console.error('Error cancelando escaneo:', error);
     }
   };
 
@@ -147,6 +164,16 @@ export default function AdminPanel({ isOpen, onClose }: AdminPanelProps) {
               )}
               {isSyncing ? 'Sincronizando...' : 'Forzar Sincronización'}
             </button>
+            {isSyncing && (
+              <button
+                onClick={handleCancelScan}
+                disabled={currentStatus?.cancelRequested}
+                className="w-full mt-2 flex items-center justify-center gap-2 py-2.5 rounded-lg bg-destructive/10 text-destructive hover:bg-destructive/20 border border-destructive/30 text-xs font-bold uppercase tracking-wider transition-all disabled:opacity-50 active:scale-95"
+              >
+                <Square size={12} fill="currentColor" />
+                {currentStatus?.cancelRequested ? 'Cancelando...' : 'Cancelar Sincronización'}
+              </button>
+            )}
             <p className="text-[10px] text-center text-muted-foreground mt-3 uppercase tracking-widest font-semibold flex flex-col items-center">
               <span>El servidor realiza auto-escaneos frecuentemente en segundo plano</span>
               {stats.last_scan && (
@@ -169,6 +196,7 @@ export default function AdminPanel({ isOpen, onClose }: AdminPanelProps) {
                     {currentStatus.status === 'indexing' && 'Indexando cambios...'}
                     {currentStatus.status === 'deleting' && 'Limpiando base de datos...'}
                     {currentStatus.status === 'idle' && 'Sincronización Completa'}
+                    {currentStatus.status === 'cancelled' && 'Sincronización Cancelada'}
                     {currentStatus.status === 'error' && 'Error en Sincronización'}
                   </span>
                   {currentStatus.currentFile && (

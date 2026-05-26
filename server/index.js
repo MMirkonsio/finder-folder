@@ -17,17 +17,35 @@ const port = process.env.PORT || 3001;
 let extractorPipeline = null;
 const embeddingCache = new Map(); // id -> Float32Array
 
+// Crea (si no existe) la tabla DirectoryCache. Se llama desde ensureSchema y como
+// auto-healing en runIncrementalScan por si la migración inicial falló por algún motivo.
+async function ensureDirectoryCacheTable() {
+  try {
+    await prisma.$executeRawUnsafe(
+      'CREATE TABLE IF NOT EXISTS "DirectoryCache" (dir_path TEXT PRIMARY KEY, mtime INTEGER NOT NULL, last_scanned INTEGER NOT NULL)'
+    );
+    return true;
+  } catch (e) {
+    console.error('[Schema] Error creando DirectoryCache:', e.message || e);
+    return false;
+  }
+}
+
 async function ensureSchema() {
   console.log('[Schema] Verificando integridad de la base de datos...');
+
+  // Cada paso en su propio try/catch — un fallo no debe impedir los demás
   try {
-    // Verificar FileRecord.embedding
     const fileRecordCols = await prisma.$queryRawUnsafe(`PRAGMA table_info("FileRecord")`);
     if (!fileRecordCols.find(c => c.name === 'embedding')) {
       console.log('[Schema] Añadiendo columna embedding a FileRecord...');
       await prisma.$executeRawUnsafe(`ALTER TABLE "FileRecord" ADD COLUMN "embedding" TEXT`);
     }
+  } catch (e) {
+    console.error('[Schema] Error en FileRecord:', e.message || e);
+  }
 
-    // Verificar ServerConfig.root_path_2 a root_path_10
+  try {
     const configCols = await prisma.$queryRawUnsafe(`PRAGMA table_info("ServerConfig")`);
     for (let i = 2; i <= 10; i++) {
       const colName = `root_path_${i}`;
@@ -36,10 +54,14 @@ async function ensureSchema() {
         await prisma.$executeRawUnsafe(`ALTER TABLE "ServerConfig" ADD COLUMN "${colName}" TEXT`);
       }
     }
-    console.log('[Schema] Base de datos verificada y actualizada.');
-  } catch (error) {
-    console.error('[Schema] Error verificando el esquema:', error);
+  } catch (e) {
+    console.error('[Schema] Error en ServerConfig:', e.message || e);
   }
+
+  const ok = await ensureDirectoryCacheTable();
+  console.log(ok
+    ? '[Schema] Base de datos verificada (incluida DirectoryCache).'
+    : '[Schema] Base de datos verificada con advertencias.');
 }
 
 async function initAI() {
@@ -128,8 +150,9 @@ let syncStatus = {
   processed: 0,
   total: 0,
   currentFile: '',
-  status: 'idle', // 'idle', 'scanning', 'indexing', 'deleting', 'completed', 'error'
-  error: null
+  status: 'idle', // 'idle', 'scanning', 'indexing', 'deleting', 'completed', 'error', 'cancelled'
+  error: null,
+  cancelRequested: false
 };
 
 // Allowed extensions for filtering (Productivity files only)
@@ -189,89 +212,149 @@ async function upsertBatch(batch) {
   }
 }
 
-// Helper function to scan directory recursively (Asynchronous)
-async function scanAndIndex(dir, context) {
+// Concurrencia para llamadas stat() — sobre red (NAS) las latencias se solapan,
+// con 32 paralelo conseguimos ~10-30x speedup respecto a serial.
+const STAT_CONCURRENCY = 32;
+
+// Procesa un archivo individual: hace stat, compara con DB, y agrega a batch si cambió.
+async function processFile(file, context) {
+  // Check de cancelación temprano — evita stats innecesarios
+  if (syncStatus.cancelRequested) return;
   try {
-    const items = await fs.promises.readdir(dir, { withFileTypes: true });
+    const stats = await fs.promises.stat(file.fullPath);
+    const filePath = file.fullPath.replace(/\\/g, '/');
+    const diskTime = stats.mtime.getTime();
+    const diskSize = stats.size;
 
-    for (const item of items) {
-      if (item.name.startsWith('.') || 
-          item.name === 'node_modules' || 
-          item.name === '$RECYCLE.BIN' || 
-          item.name === 'System Volume Information' ||
-          item.name.startsWith('~$')) continue;
+    context.allDiscoveredPaths.add(filePath);
+    syncStatus.total++;
 
-      const fullPath = path.join(dir, item.name);
+    const dbInfo = context.dbFilesMap.get(filePath);
+    const isSameTime = dbInfo && Math.abs(dbInfo.lastModified - diskTime) < 2000;
+    const isSameSize = dbInfo && dbInfo.size === diskSize;
+    const needsAI = dbInfo && !dbInfo.hasEmbedding;
 
-      if (item.isDirectory()) {
-        await scanAndIndex(fullPath, context);
-      } else {
-        const ext = path.extname(item.name).slice(1).toLowerCase();
-        if (ext === 'tmp' || !ALLOWED_EXTENSIONS.has(ext)) continue;
-
-        try {
-          const stats = await fs.promises.stat(fullPath);
-          const filePath = fullPath.replace(/\\/g, '/');
-          const diskTime = stats.mtime.getTime();
-          const diskSize = stats.size;
-
-          context.allDiscoveredPaths.add(filePath);
-          syncStatus.total++;
-
-          // INCREMENTAL CHECK: Compare with DB snapshot (timestamp and size)
-          const dbInfo = context.dbFilesMap.get(filePath);
-          
-          // Use 2-second tolerance for time (common for NAS/network shares)
-          const isSameTime = dbInfo && Math.abs(dbInfo.lastModified - diskTime) < 2000;
-          const isSameSize = dbInfo && dbInfo.size === diskSize;
-          const needsAI = dbInfo && !dbInfo.hasEmbedding;
-
-          if (dbInfo && isSameTime && isSameSize && !needsAI) {
-            // Unchanged file AND has Embedding: Skip indexing but mark as processed immediately
-            syncStatus.processed++;
-            context.skips++;
-            
-            // Periodically update the UI file name even when skipping very fast
-            if (context.skips % 500 === 0) {
-              syncStatus.currentFile = item.name + ' (Omitido)';
-            }
-          } else {
-            // DEBUG: Log first 5 mismatches
-            if (context.updates < 5) {
-              if (!dbInfo) console.log(`[SYNC] Nuevo: ${filePath}`);
-              else console.log(`[SYNC] Modificado: ${filePath} (DB-Time: ${dbInfo.lastModified}, Disk-Time: ${diskTime}, DB-Size: ${dbInfo.size}, Disk-Size: ${diskSize})`);
-            }
-
-            // New or modified file: Add to batch
-            syncStatus.currentFile = item.name;
-            const fileData = {
-              file_name: item.name,
-              file_path: filePath,
-              file_size: diskSize,
-              file_type: ext,
-              owner_user: '', 
-              last_modified: stats.mtime.toISOString(),
-            };
-
-            context.batch.push(fileData);
-
-            if (context.batch.length >= 500) {
-              const prevStatus = syncStatus.status;
-              syncStatus.status = 'indexing';
-              await upsertBatch(context.batch);
-              syncStatus.processed += context.batch.length;
-              context.updates += context.batch.length;
-              context.batch = [];
-              syncStatus.status = prevStatus;
-            }
-          }
-        } catch (err) {
-          console.error(`Error reading ${fullPath}:`, err.message);
-        }
+    if (dbInfo && isSameTime && isSameSize && !needsAI) {
+      syncStatus.processed++;
+      context.skips++;
+      // Actualizar UI con menos frecuencia para no saturar (cada 2000 omisiones)
+      if (context.skips % 2000 === 0) {
+        syncStatus.currentFile = file.name + ' (Omitido)';
       }
+    } else {
+      if (context.updates < 5) {
+        if (!dbInfo) console.log(`[SYNC] Nuevo: ${filePath}`);
+        else console.log(`[SYNC] Modificado: ${filePath}`);
+      }
+      syncStatus.currentFile = file.name;
+      context.batch.push({
+        file_name: file.name,
+        file_path: filePath,
+        file_size: diskSize,
+        file_type: file.ext,
+        owner_user: '',
+        last_modified: stats.mtime.toISOString(),
+      });
     }
   } catch (err) {
-    console.error(`Error scanning ${dir}:`, err.message);
+    console.error(`Error reading ${file.fullPath}:`, err.message);
+  }
+}
+
+// Recorre directorio recursivamente. Si el mtime de la carpeta no ha cambiado
+// desde el último scan, salta TODOS los stat de los archivos dentro (gran win).
+async function scanAndIndex(dir, context) {
+  // Punto de cancelación temprana
+  if (syncStatus.cancelRequested) return;
+
+  // 1. Stat al directorio (1 sola llamada de red) para conocer su mtime actual
+  let dirMtime = null;
+  try {
+    const dirStats = await fs.promises.stat(dir);
+    dirMtime = dirStats.mtime.getTime();
+  } catch (err) {
+    console.error(`Error stat'ing dir ${dir}:`, err.message);
+    return;
+  }
+
+  const normalizedDir = dir.replace(/\\/g, '/');
+  const cachedMtime = context.dirCache.get(normalizedDir);
+  const dirUnchanged = cachedMtime !== undefined && cachedMtime === dirMtime;
+
+  // 2. Listar la carpeta (necesario incluso en fast path: necesitamos subdirs para recursar)
+  let items;
+  try {
+    items = await fs.promises.readdir(dir, { withFileTypes: true });
+  } catch (err) {
+    console.error(`Error reading dir ${dir}:`, err.message);
+    return;
+  }
+
+  const filesToCheck = [];
+  const subdirs = [];
+
+  for (const item of items) {
+    if (item.name.startsWith('.') ||
+        item.name === 'node_modules' ||
+        item.name === '$RECYCLE.BIN' ||
+        item.name === 'System Volume Information' ||
+        item.name.startsWith('~$')) continue;
+
+    const fullPath = path.join(dir, item.name);
+
+    if (item.isDirectory()) {
+      subdirs.push(fullPath);
+    } else {
+      const ext = path.extname(item.name).slice(1).toLowerCase();
+      if (ext === 'tmp' || !ALLOWED_EXTENSIONS.has(ext)) continue;
+      filesToCheck.push({ name: item.name, fullPath, ext });
+    }
+  }
+
+  if (dirUnchanged && filesToCheck.length > 0) {
+    // === FAST PATH: la carpeta no cambió → confiar en la DB, sin stat por archivo
+    syncStatus.currentFile = path.basename(dir) + ' (carpeta sin cambios)';
+    for (const file of filesToCheck) {
+      const filePath = file.fullPath.replace(/\\/g, '/');
+      const dbInfo = context.dbFilesMap.get(filePath);
+      if (dbInfo && dbInfo.hasEmbedding) {
+        // El archivo está en DB y tiene embedding → marcarlo como visto y listo
+        context.allDiscoveredPaths.add(filePath);
+        syncStatus.total++;
+        syncStatus.processed++;
+        context.skips++;
+      } else {
+        // Archivo nuevo o sin embedding: procesarlo individualmente
+        await processFile(file, context);
+      }
+    }
+  } else {
+    // === SLOW PATH: stat en paralelo (carpeta nueva o modificada)
+    for (let i = 0; i < filesToCheck.length; i += STAT_CONCURRENCY) {
+      if (syncStatus.cancelRequested) return;
+      const slice = filesToCheck.slice(i, i + STAT_CONCURRENCY);
+      await Promise.all(slice.map(f => processFile(f, context)));
+
+      if (context.batch.length >= 500) {
+        const toProcess = context.batch;
+        context.batch = [];
+        const prevStatus = syncStatus.status;
+        syncStatus.status = 'indexing';
+        await upsertBatch(toProcess);
+        syncStatus.processed += toProcess.length;
+        context.updates += toProcess.length;
+        syncStatus.status = prevStatus;
+      }
+    }
+
+    // Solo cacheamos el mtime tras escanear realmente (no en fast path: ya estaba cacheado)
+    context.dirCacheUpdates.set(normalizedDir, dirMtime);
+  }
+
+  // 3. Recursión serial sobre subdirectorios (cada uno verifica su propio mtime)
+  for (const subdir of subdirs) {
+    if (syncStatus.cancelRequested) return;
+    await scanAndIndex(subdir, context);
   }
 }
 
@@ -334,7 +417,8 @@ app.post('/api/sync', async (req, res) => {
 });
 
 // Standalone incremental scan runner
-async function runIncrementalScan() {
+// specificPaths: si se provee, solo escanea esas rutas en lugar de todas las configuradas
+async function runIncrementalScan(specificPaths = null) {
   if (syncStatus.isScanning) {
     console.log('Omitiendo auto-escaneo: ya hay un escaneo en progreso.');
     return { error: 'Ya hay un escaneo en progreso' };
@@ -345,18 +429,20 @@ async function runIncrementalScan() {
       where: { id: 'default' }
     });
 
-    const roots = [
-      config?.root_path,
-      config?.root_path_2,
-      config?.root_path_3,
-      config?.root_path_4,
-      config?.root_path_5,
-      config?.root_path_6,
-      config?.root_path_7,
-      config?.root_path_8,
-      config?.root_path_9,
-      config?.root_path_10
-    ].filter(r => r && r.trim() !== '');
+    const roots = specificPaths && specificPaths.length > 0
+      ? specificPaths.filter(r => r && r.trim() !== '')
+      : [
+          config?.root_path,
+          config?.root_path_2,
+          config?.root_path_3,
+          config?.root_path_4,
+          config?.root_path_5,
+          config?.root_path_6,
+          config?.root_path_7,
+          config?.root_path_8,
+          config?.root_path_9,
+          config?.root_path_10
+        ].filter(r => r && r.trim() !== '');
 
     if (roots.length === 0) {
       return { error: 'No hay rutas configuradas' };
@@ -367,14 +453,15 @@ async function runIncrementalScan() {
       return { error: 'Ninguna de las rutas configuradas existe en el servidor' };
     }
 
-    // Reset status
+    // Reset status (cancelRequested = false al iniciar uno nuevo)
     syncStatus = {
       isScanning: true,
       processed: 0,
       total: 0,
       currentFile: '',
       status: 'scanning',
-      error: null
+      error: null,
+      cancelRequested: false
     };
 
     // Run in background (non-blocking)
@@ -382,30 +469,59 @@ async function runIncrementalScan() {
       try {
         console.log(`[Auto-Scan] Iniciando escaneo en múltiples rutas:`, validRoots);
         
-        const dbFiles = await prisma.fileRecord.findMany({
-          select: { file_path: true, last_modified: true, file_size: true, embedding: true }
-        });
-        const dbFilesMap = new Map(dbFiles.map(f => [
-          f.file_path, 
-          { lastModified: f.last_modified.getTime(), size: f.file_size, hasEmbedding: !!f.embedding }
+        // Mismo workaround que en initAI(): evitar crash "Failed to convert rust String into napi string"
+        // que ocurre cuando Prisma intenta pasar miles de embeddings (JSON largo) por el bridge Rust->Node.
+        const dbFilesRaw = await prisma.$queryRawUnsafe(
+          `SELECT file_path, last_modified, file_size, CASE WHEN embedding IS NOT NULL THEN 1 ELSE 0 END as has_embedding FROM "FileRecord"`
+        );
+        const dbFilesMap = new Map(dbFilesRaw.map(f => [
+          String(f.file_path),
+          {
+            lastModified: new Date(f.last_modified).getTime(),
+            size: Number(f.file_size),
+            hasEmbedding: Number(f.has_embedding) === 1
+          }
         ]));
         console.log(`Snapshot DB cargado: ${dbFilesMap.size} archivos conocidos.`);
+
+        // Cargar cache de mtimes de directorios — permite saltar carpetas sin cambios
+        let dirCacheRows = [];
+        try {
+          dirCacheRows = await prisma.$queryRawUnsafe(`SELECT dir_path, mtime FROM "DirectoryCache"`);
+        } catch (err) {
+          // Auto-healing: si la tabla no existe, intentar crearla AHORA
+          console.warn('[Scan] DirectoryCache no disponible. Creando...');
+          const created = await ensureDirectoryCacheTable();
+          if (created) {
+            try {
+              dirCacheRows = await prisma.$queryRawUnsafe(`SELECT dir_path, mtime FROM "DirectoryCache"`);
+              console.log('[Scan] DirectoryCache creada exitosamente.');
+            } catch (retryErr) {
+              console.error('[Scan] Falló retry de DirectoryCache:', retryErr.message || retryErr);
+            }
+          }
+        }
+        const dirCache = new Map(dirCacheRows.map(r => [String(r.dir_path), Number(r.mtime)]));
+        console.log(`Cache de directorios cargado: ${dirCache.size} carpetas con mtime conocido.`);
 
         const context = {
           batch: [],
           allDiscoveredPaths: new Set(),
           dbFilesMap: dbFilesMap,
+          dirCache: dirCache,           // mtimes previamente vistos
+          dirCacheUpdates: new Map(),   // mtimes nuevos a persistir al final
           skips: 0,
           updates: 0
         };
 
         // 1. Scan and Index incrementally in real-time
         for (const root of validRoots) {
+          if (syncStatus.cancelRequested) break;
           console.log(`\n>>> Escaneando ruta: ${root}`);
           await scanAndIndex(root, context);
         }
-        
-        // 2. Process final batch
+
+        // 2. Process final batch (incluso si cancelado, guardar lo ya procesado)
         if (context.batch.length > 0) {
           const processedInLastBatch = context.batch.length;
           syncStatus.status = 'indexing';
@@ -414,30 +530,53 @@ async function runIncrementalScan() {
           context.updates += processedInLastBatch;
         }
 
-        // 3. Handle deletions (Cleanup) - Check for obsolete files inside EACH valid root path
-        syncStatus.status = 'deleting';
-        for (const root of validRoots) {
-          const normalizedRootPath = root.replace(/\\/g, '/');
-          
-          const currentDbFiles = await prisma.fileRecord.findMany({ 
-            where: {
-              file_path: { startsWith: normalizedRootPath }
-            },
-            select: { file_path: true } 
-          });
-          
-          const toDelete = currentDbFiles
-            .filter(f => !context.allDiscoveredPaths.has(f.file_path))
-            .map(f => f.file_path);
-          
-          if (toDelete.length > 0) {
-            console.log(`Limpiando ${toDelete.length} archivos eliminados dentro de ${root}...`);
-            const deleteBatchSize = 1000;
-            for (let i = 0; i < toDelete.length; i += deleteBatchSize) {
-              const batch = toDelete.slice(i, i + deleteBatchSize);
-              await prisma.fileRecord.deleteMany({
-                where: { file_path: { in: batch } }
-              });
+        // 2.5 Persistir mtimes de directorios escaneados (para próximas iteraciones rápidas)
+        if (context.dirCacheUpdates.size > 0) {
+          console.log(`Guardando cache de ${context.dirCacheUpdates.size} carpetas...`);
+          const entries = Array.from(context.dirCacheUpdates.entries());
+          const now = Date.now();
+          const CHUNK = 200;
+          for (let i = 0; i < entries.length; i += CHUNK) {
+            const slice = entries.slice(i, i + CHUNK);
+            const placeholders = slice.map(() => '(?, ?, ?)').join(', ');
+            const params = [];
+            for (const [dir, mtime] of slice) params.push(dir, mtime, now);
+            await prisma.$executeRawUnsafe(
+              `INSERT INTO "DirectoryCache" (dir_path, mtime, last_scanned) VALUES ${placeholders}
+               ON CONFLICT(dir_path) DO UPDATE SET mtime = excluded.mtime, last_scanned = excluded.last_scanned`,
+              ...params
+            );
+          }
+        }
+
+        // 3. Handle deletions (Cleanup) — SOLO si NO fue cancelado.
+        //    Si se cancela, no podemos confiar en que allDiscoveredPaths esté completo,
+        //    así que saltar la limpieza evita borrar archivos válidos por error.
+        if (!syncStatus.cancelRequested) {
+          syncStatus.status = 'deleting';
+          for (const root of validRoots) {
+            const normalizedRootPath = root.replace(/\\/g, '/');
+
+            const currentDbFiles = await prisma.fileRecord.findMany({
+              where: {
+                file_path: { startsWith: normalizedRootPath }
+              },
+              select: { file_path: true }
+            });
+
+            const toDelete = currentDbFiles
+              .filter(f => !context.allDiscoveredPaths.has(f.file_path))
+              .map(f => f.file_path);
+
+            if (toDelete.length > 0) {
+              console.log(`Limpiando ${toDelete.length} archivos eliminados dentro de ${root}...`);
+              const deleteBatchSize = 1000;
+              for (let i = 0; i < toDelete.length; i += deleteBatchSize) {
+                const batch = toDelete.slice(i, i + deleteBatchSize);
+                await prisma.fileRecord.deleteMany({
+                  where: { file_path: { in: batch } }
+                });
+              }
             }
           }
         }
@@ -448,9 +587,16 @@ async function runIncrementalScan() {
           data: { total_files: totalFiles, last_scan: new Date() }
         });
 
-        syncStatus.status = 'idle';
-        syncStatus.isScanning = false;
-        console.log(`Sync incremental finalizado. Total en DB: ${totalFiles}. Escaneados: ${syncStatus.total}. Actualizados: ${context.updates}. Sin cambios: ${context.skips}`);
+        if (syncStatus.cancelRequested) {
+          syncStatus.status = 'cancelled';
+          syncStatus.isScanning = false;
+          syncStatus.cancelRequested = false;
+          console.log(`[Scan] Cancelado por el usuario. Parcial: ${context.updates} actualizados, ${context.skips} sin cambios.`);
+        } else {
+          syncStatus.status = 'idle';
+          syncStatus.isScanning = false;
+          console.log(`Sync incremental finalizado. Total en DB: ${totalFiles}. Escaneados: ${syncStatus.total}. Actualizados: ${context.updates}. Sin cambios: ${context.skips}`);
+        }
       } catch (error) {
         console.error('Error en escaneo:', error);
         syncStatus.status = 'error';
@@ -472,13 +618,28 @@ setInterval(() => {
   runIncrementalScan();
 }, 20 * 60 * 1000);
 
-// Server-side scan endpoint (Manual Trigger)
+// Server-side scan endpoint
+// Body opcional: { paths: string[] } para escanear solo carpetas específicas
 app.post('/api/scan', async (req, res) => {
-  const result = await runIncrementalScan();
+  const { paths } = req.body || {};
+  const specificPaths = Array.isArray(paths) && paths.length > 0 ? paths : null;
+  const result = await runIncrementalScan(specificPaths);
   if (result.error) {
     return res.status(400).json(result);
   }
   res.json(result);
+});
+
+// Cancelar el escaneo en curso (si lo hay). El scan se detiene en el próximo punto seguro.
+app.post('/api/scan/cancel', (req, res) => {
+  console.log(`[Scan] >>> /api/scan/cancel invocado. isScanning=${syncStatus.isScanning}`);
+  if (!syncStatus.isScanning) {
+    return res.json({ success: false, message: 'No hay escaneo en progreso' });
+  }
+  syncStatus.cancelRequested = true;
+  syncStatus.currentFile = 'Cancelando...';
+  console.log('[Scan] >>> cancelRequested=true. Esperando próximo punto seguro.');
+  res.json({ success: true, message: 'Cancelación solicitada' });
 });
 
 // File proxy endpoint to serve local/NAS files over HTTP securely by DB UUID
@@ -836,4 +997,6 @@ app.post('/api/config', async (req, res) => {
 
 app.listen(port, '127.0.0.1', () => {
   console.log(`Server running at http://127.0.0.1:${port}`);
+  // Señalizar al proceso padre (Electron) que el servidor está listo
+  if (process.send) process.send('ready');
 });

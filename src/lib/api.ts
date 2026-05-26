@@ -39,8 +39,9 @@ export interface SyncStatus {
   processed: number;
   total: number;
   currentFile: string;
-  status: 'idle' | 'scanning' | 'comparing' | 'deleting' | 'indexing' | 'completed' | 'error';
+  status: 'idle' | 'scanning' | 'comparing' | 'deleting' | 'indexing' | 'completed' | 'error' | 'cancelled';
   error: string | null;
+  cancelRequested?: boolean;
 }
 
 export const getFileUrl = (fileId: string, configServerUrl?: string) => {
@@ -85,15 +86,25 @@ export const api = {
     return response.json();
   },
 
-  scanFilesFromServer: async () => {
+  scanFilesFromServer: async (paths?: string[]) => {
     const response = await fetch(`${API_URL}/scan`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(paths && paths.length > 0 ? { paths } : {}),
     });
     if (!response.ok) {
       const error = await response.json();
       throw new Error(error.error || 'Error scanning from server');
     }
+    return response.json();
+  },
+
+  cancelScan: async () => {
+    const response = await fetch(`${API_URL}/scan/cancel`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+    });
+    if (!response.ok) throw new Error('Error cancelando escaneo');
     return response.json();
   },
 

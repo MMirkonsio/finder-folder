@@ -1,7 +1,7 @@
 {
   "name": "hellemabot",
   "private": true,
-  "version": "0.0.17",
+  "version": "0.0.18",
   "type": "module",
   "main": "electron/main.cjs",
   "scripts": {
@@ -14,7 +14,8 @@
     "server": "node server/index.js",
     "electron:dev": "concurrently \"npm run dev\" \"wait-on http://localhost:5173 && electron .\"",
     "electron:start": "electron .",
-    "package": "npm run build && npx @electron/rebuild -f -w sqlite3 && electron-builder"
+    "package": "npm run build && npx @electron/rebuild -f -w sqlite3 && electron-builder && npm run verify:package",
+    "verify:package": "node verify-package.cjs"
   },
   "dependencies": {
     "@prisma/client": "^5.22.0",
@@ -67,9 +68,6 @@
       "server/**/*",
       "prisma/**/*",
       "package.json",
-      "!node_modules/onnxruntime-web/**",
-      "!node_modules/sharp/**",
-      "!node_modules/@xenova/transformers/node_modules/sharp/**",
       "!node_modules/@xenova/transformers/dist/**",
       "!node_modules/@xenova/transformers/.cache/**",
       "!node_modules/onnxruntime-node/bin/napi-v3/darwin/**",

@@ -1,7 +1,7 @@
 {
   "name": "hellemabot",
   "private": true,
-  "version": "0.0.16",
+  "version": "0.0.17",
   "type": "module",
   "main": "electron/main.cjs",
   "scripts": {
@@ -10,6 +10,7 @@
     "lint": "eslint .",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit -p tsconfig.app.json",
+    "postinstall": "prisma generate",
     "server": "node server/index.js",
     "electron:dev": "concurrently \"npm run dev\" \"wait-on http://localhost:5173 && electron .\"",
     "electron:start": "electron .",
@@ -23,10 +24,6 @@
     "electron-is-dev": "^3.0.1",
     "electron-updater": "^6.8.3",
     "express": "^4.22.1",
-    "lucide-react": "^0.344.0",
-    "react": "^18.3.1",
-    "react-dom": "^18.3.1",
-    "react-window": "^2.2.7",
     "sqlite3": "^5.1.7"
   },
   "devDependencies": {
@@ -43,9 +40,13 @@
     "eslint-plugin-react-hooks": "^5.1.0-rc.0",
     "eslint-plugin-react-refresh": "^0.4.11",
     "globals": "^15.9.0",
+    "lucide-react": "^0.344.0",
     "png-to-ico": "^3.0.1",
     "postcss": "^8.4.35",
     "prisma": "^5.21.1",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "react-window": "^2.3.1",
     "sharp": "^0.34.5",
     "tailwindcss": "^3.4.1",
     "typescript": "^5.5.3",
@@ -65,7 +66,17 @@
       "electron/**/*",
       "server/**/*",
       "prisma/**/*",
-      "package.json"
+      "package.json",
+      "!node_modules/onnxruntime-web/**",
+      "!node_modules/sharp/**",
+      "!node_modules/@xenova/transformers/node_modules/sharp/**",
+      "!node_modules/@xenova/transformers/dist/**",
+      "!node_modules/@xenova/transformers/.cache/**",
+      "!node_modules/onnxruntime-node/bin/napi-v3/darwin/**",
+      "!node_modules/onnxruntime-node/bin/napi-v3/linux/**",
+      "!node_modules/onnxruntime-node/bin/napi-v3/win32/arm64/**",
+      "!**/*.{md,markdown,map}",
+      "!**/{test,tests,__tests__,example,examples,docs,.github}/**"
     ],
     "extraResources": [
       {

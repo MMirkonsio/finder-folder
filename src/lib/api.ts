@@ -55,6 +55,8 @@ export const getFileUrl = (fileId: string, configServerUrl?: string) => {
 
 export interface SearchResponse {
   refine_needed?: boolean;
+  /** true cuando no hubo coincidencias de texto y los resultados son aproximaciones de la IA */
+  suggestions_only?: boolean;
   message?: string;
   count?: number;
   files?: FileRecord[];

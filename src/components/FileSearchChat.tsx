@@ -143,7 +143,9 @@ export default function FileSearchChat({ onOpenConfig, onOpenAdmin }: FileSearch
       if (Array.isArray(resp)) {
         results = resp;
       } else {
-        if (resp.refine_needed) {
+        // suggestions_only: no hubo coincidencias de texto, son aproximaciones de la IA.
+        // Se anuncian como sugerencias para no dar por encontrado lo que no se encontró.
+        if (resp.refine_needed || resp.suggestions_only) {
           isRefined = true;
           botText = resp.message || 'Encontré demasiados archivos. Por favor, especifica más.';
           results = resp.files || [];

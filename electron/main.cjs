@@ -15,7 +15,12 @@ let serverProcess;
 let tray = null;
 let isQuitting = false;
 
-let previousBounds = { x: 0, y: 0, width: 450, height: 750 };
+// Tamaño por defecto de la ventana de chat. 720x900 entra holgado en el área de
+// trabajo de 1920x1032 y da espacio para revisar listas largas de archivos.
+const CHAT_WIDTH = 720;
+const CHAT_HEIGHT = 900;
+
+let previousBounds = { x: 0, y: 0, width: CHAT_WIDTH, height: CHAT_HEIGHT };
 let bubbleBounds = null;
 
 ipcMain.on('window-close', () => {
@@ -67,7 +72,7 @@ ipcMain.on('window-restore-bubble', () => {
     const primaryDisplay = screen.getDisplayMatching(bubbleBounds);
     const workArea = primaryDisplay.workArea;
 
-    mainWindow.setMinimumSize(450, 600);
+    mainWindow.setMinimumSize(CHAT_WIDTH, CHAT_HEIGHT);
     mainWindow.setMaximumSize(10000, 10000);
 
     const chatWidth = previousBounds.width;
@@ -240,8 +245,10 @@ function createWindow() {
 
   mainWindow = new BrowserWindow({
     icon: iconPath,
-    width: 450,
-    height: 750,
+    width: CHAT_WIDTH,
+    height: CHAT_HEIGHT,
+    // Fija a propósito: las ventanas con `transparent: true` no redimensionan de
+    // forma fiable en Windows, y la transparencia es necesaria para la burbuja.
     resizable: false,
     frame: false,
     transparent: true,

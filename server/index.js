@@ -141,8 +141,25 @@ async function generateEmbedding(text) {
 }
 // =====================================
 
-app.use(cors());
-app.use(express.json({ limit: '100mb' }));
+// CORS restringido. Con `cors()` abierto el servidor respondía `Access-Control-Allow-Origin: *`,
+// lo que permitía a CUALQUIER web abierta en el navegador del empleado leer el índice completo
+// de la NAS con un simple fetch a 127.0.0.1:3001.
+// En producción el renderer carga desde file:// (Origin ausente o "null"); en dev desde Vite.
+const ALLOWED_ORIGINS = new Set([
+  'http://localhost:5173',
+  'http://127.0.0.1:5173',
+]);
+
+app.use(cors({
+  origin: (origin, callback) => {
+    // Sin Origin (file://, same-origin, iframe/img, curl) o el literal "null" de file://
+    if (!origin || origin === 'null') return callback(null, true);
+    return callback(null, ALLOWED_ORIGINS.has(origin));
+  }
+}));
+
+// Los endpoints solo reciben metadatos y rutas; 100mb era un límite innecesariamente alto.
+app.use(express.json({ limit: '2mb' }));
 
 // Global sync status
 let syncStatus = {
@@ -569,9 +586,16 @@ async function runIncrementalScan(specificPaths = null) {
               continue;
             }
 
+            // El prefijo DEBE terminar en '/'. Sin él, la raíz "C:/Data" también
+            // coincide con "C:/DataArchive/..." — carpetas que no se escanearon y
+            // cuyos archivos se borrarían por no estar en allDiscoveredPaths.
+            const rootPrefix = normalizedRootPath.endsWith('/')
+              ? normalizedRootPath
+              : normalizedRootPath + '/';
+
             const currentDbFiles = await prisma.fileRecord.findMany({
               where: {
-                file_path: { startsWith: normalizedRootPath }
+                file_path: { startsWith: rootPrefix }
               },
               select: { file_path: true }
             });
@@ -818,14 +842,19 @@ app.get('/api/search', async (req, res) => {
     let semanticTopIds = [];
     let semanticScores = new Map();
 
+    // Umbral base: solo descarta lo claramente irrelevante. La decisión real de qué
+    // se muestra se toma más abajo, de forma adaptativa según cuánto encontró el léxico.
+    // (Antes era 0.95 — inalcanzable: medido sobre la BD real el score máximo es ~0.70,
+    //  así que la búsqueda semántica nunca aportaba ni un solo resultado.)
+    const UMBRAL_BASE = 0.50;
+
     if (extractorPipeline && rawQuery.length > 3) {
       const queryEmbedding = await generateEmbedding(rawQuery);
       if (queryEmbedding && embeddingCache.size > 0) {
          const qEmb = new Float32Array(queryEmbedding);
          for (const [id, emb] of embeddingCache.entries()) {
              const score = cosineSimilarity(qEmb, emb);
-             const umbralMinimo = 0.95; // Filtro estricto para eliminar basura de la IA
-             if (score >= umbralMinimo) {
+             if (score >= UMBRAL_BASE) {
                 semanticScores.set(id, score);
              }
          }
@@ -890,18 +919,24 @@ app.get('/api/search', async (req, res) => {
 
     // === 3. FUSIÓN Y ORDENAMIENTO (IA + Tradicional) ===
     const mergedMap = new Map();
-    const hasExactMatches = rawResults.length > 0;
-    
-    // Put exact matches first
+    const lexicalCount = rawResults.length;
+
+    // Los resultados léxicos entran SIEMPRE, sin importar ningún umbral de IA.
     for (const r of rawResults) mergedMap.set(r.id, r);
-    
+
+    // Umbral ADAPTATIVO para inyectar archivos que la IA encontró pero el texto no.
+    // Medido sobre la BD real: la IA ayuda cuando el léxico falla y estorba cuando ya
+    // funciona (ej. "guia de despacho" pasaba de 100 a 200 resultados; "contrato de
+    // trabajo" se llenaba de "Metodo de trabajo.docx"). Por eso el corte depende de
+    // cuánto encontró el léxico, no de una constante fija.
+    let aiThreshold;
+    if (lexicalCount >= 20)     aiThreshold = Infinity; // ya hay de sobra: la IA solo reordena
+    else if (lexicalCount > 0)  aiThreshold = 0.65;     // pocos: solo lo muy parecido
+    else                        aiThreshold = 0.55;     // ninguno: la IA es la única opción
+
     for (const r of semanticResults) {
        const score = semanticScores.get(r.id) || 0;
        if (!mergedMap.has(r.id)) {
-           // Si tenemos coincidencias exactas (ej. estamos buscando a una persona específica), 
-           // limitamos que la IA introduzca archivos basura a menos que su puntaje sea muy alto
-           const aiThreshold = hasExactMatches ? 0.70 : 0.65;
-           
            if (score >= aiThreshold) {
                mergedMap.set(r.id, r);
            }
@@ -911,6 +946,10 @@ app.get('/api/search', async (req, res) => {
            existing._name_score = Number(existing._name_score || 0) + (score * 50);
        }
     }
+
+    // Si no hubo NINGUNA coincidencia textual, lo que se devuelve son aproximaciones
+    // de la IA, no coincidencias. La UI debe presentarlas como sugerencias.
+    const onlySuggestions = lexicalCount === 0 && mergedMap.size > 0;
     
     // Sort final list: Prioridad RELEVANCIA (IA/Texto) primero, luego FECHA como desempate
     rawResults = Array.from(mergedMap.values())
@@ -940,6 +979,17 @@ app.get('/api/search', async (req, res) => {
         refine_needed: true, 
         count: totalCount,
         message: `Encontré demasiados resultados. Te muestro los ${finalResults.length} más relevantes, si no ves tu archivo, por favor especifica más detalles (como el mes o año).`,
+        files: await mapWithAbsoluteAndAccess(finalResults)
+      });
+    }
+
+    // Sin coincidencias textuales: son aproximaciones de la IA. Se marcan para que la
+    // UI no las presente como si fueran lo que el usuario pidió.
+    if (onlySuggestions) {
+      return res.status(200).json({
+        suggestions_only: true,
+        count: finalResults.length,
+        message: 'No encontré coincidencias exactas. ¿Alguno de estos se parece a lo que buscas?',
         files: await mapWithAbsoluteAndAccess(finalResults)
       });
     }

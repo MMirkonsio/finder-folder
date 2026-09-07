@@ -43,3 +43,6 @@ prisma/generated/
 ! .vscode/extensions.json
 .vscode/settings.json
 .vscode/launch.json
+
+# Configuracion local de Claude Code (permisos y ajustes de la maquina)
+.claude/
